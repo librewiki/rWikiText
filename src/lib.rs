@@ -80,9 +80,14 @@ impl fmt::Display for ConversionError {
 }
 impl std::error::Error for ConversionError {}
 
-// A block representation keeps parsing and serialization independent of each other.
+// Blocks retain their order independently of the input and output formats.
 struct Document {
-    paragraphs: Vec<String>,
+    blocks: Vec<Block>,
+}
+
+enum Block {
+    Paragraph(String),
+    Heading { level: u8, text: String },
 }
 
 pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, ConversionError> {
@@ -98,26 +103,44 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
         Format::Gfm => parse_gfm(request.input)?,
         Format::Html => parse_html(request.input)?,
     };
-    let content = match request.target {
-        Format::Wikitext => document
-            .paragraphs
-            .iter()
-            .map(|s| escape_wikitext(s))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        Format::Gfm => document
-            .paragraphs
-            .iter()
-            .map(|s| escape_gfm(s))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        Format::Html => document
-            .paragraphs
-            .iter()
-            .map(|s| format!("<p>{}</p>", html_escape::encode_text(s)))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    };
+    let mut ids = std::collections::HashSet::<String>::new();
+    let content = document
+        .blocks
+        .iter()
+        .map(|block| match (request.target, block) {
+            (Format::Wikitext, Block::Paragraph(text)) => escape_wikitext(text),
+            (Format::Wikitext, Block::Heading { level, text }) => {
+                let delimiter = "=".repeat(*level as usize);
+                format!("{delimiter} {} {delimiter}", escape_wikitext(text))
+            }
+            (Format::Gfm, Block::Paragraph(text)) => escape_gfm(text),
+            (Format::Gfm, Block::Heading { level, text }) => {
+                format!("{} {}", "#".repeat(*level as usize), escape_gfm(text))
+            }
+            (Format::Html, Block::Paragraph(text)) => {
+                format!("<p>{}</p>", html_escape::encode_text(text))
+            }
+            (Format::Html, Block::Heading { level, text }) => {
+                let base = text.split_whitespace().collect::<Vec<_>>().join("_");
+                let mut id = base.clone();
+                let mut suffix = 2;
+                while !ids.insert(id.to_lowercase()) {
+                    id = format!("{base}_{suffix}");
+                    suffix += 1;
+                }
+                format!(
+                    "<h{level} id=\"{}\">{}</h{level}>",
+                    html_escape::encode_double_quoted_attribute(&id),
+                    html_escape::encode_text(text)
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(if request.target == Format::Html {
+            "\n"
+        } else {
+            "\n\n"
+        });
     Ok(ConversionResult {
         content,
         metadata: PageMetadata::default(),
@@ -125,105 +148,169 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
     })
 }
 
+fn flush_paragraph(blocks: &mut Vec<Block>, lines: &mut Vec<&str>) {
+    if !lines.is_empty() {
+        blocks.push(Block::Paragraph(
+            html_escape::decode_html_entities(&lines.join("\n")).into_owned(),
+        ));
+        lines.clear();
+    }
+}
+
 fn parse_wikitext(input: &str) -> Result<Document, ConversionError> {
     let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
-    let mut paragraphs = Vec::new();
+    let mut blocks = Vec::new();
     let mut lines = Vec::new();
     let mut blank_lines = 0;
     for line in normalized.split('\n') {
         if line.trim().is_empty() {
             blank_lines += 1;
-            if !lines.is_empty() {
-                paragraphs.push(html_escape::decode_html_entities(&lines.join("\n")).into_owned());
-                lines.clear();
-            }
-        } else {
-            if !paragraphs.is_empty() && blank_lines > 1 {
-                return Err(ConversionError::new(
-                    "multiple blank lines between paragraphs are unsupported",
-                ));
-            }
-            blank_lines = 0;
-            // These forms are not plain paragraphs; reject rather than silently changing meaning.
-            if line.starts_with([' ', '\t', '*', '#', ';', ':', '='])
-                || line.starts_with("----")
-                || line.contains("[[")
-                || line.contains("{{")
-                || line.contains("''")
-                || line.contains('<')
-            {
-                return Err(ConversionError::new("unsupported wikitext syntax"));
-            }
-            lines.push(line);
+            flush_paragraph(&mut blocks, &mut lines);
+            continue;
         }
+        if !blocks.is_empty() && blank_lines > 1 {
+            return Err(ConversionError::new(
+                "multiple blank lines between blocks are unsupported",
+            ));
+        }
+        blank_lines = 0;
+        let heading_line = line.trim_end();
+        let start = heading_line.bytes().take_while(|&c| c == b'=').count();
+        let end = heading_line
+            .bytes()
+            .rev()
+            .take_while(|&c| c == b'=')
+            .count();
+        let level = if start == heading_line.len() {
+            start.saturating_sub(1).checked_div(2).unwrap_or(0).min(6)
+        } else {
+            start.min(end).min(6)
+        };
+        if level > 0 {
+            flush_paragraph(&mut blocks, &mut lines);
+            let text = &heading_line[level..heading_line.len() - level];
+            if text.contains("[[")
+                || text.contains("{{")
+                || text.contains("''")
+                || text.contains('<')
+            {
+                return Err(ConversionError::new("unsupported wikitext heading syntax"));
+            }
+            blocks.push(Block::Heading {
+                level: level as u8,
+                text: html_escape::decode_html_entities(text.trim()).into_owned(),
+            });
+            continue;
+        }
+        if line.starts_with([' ', '\t', '*', '#', ';', ':'])
+            || line.starts_with("----")
+            || line.contains("[[")
+            || line.contains("{{")
+            || line.contains("''")
+            || line.contains('<')
+        {
+            return Err(ConversionError::new("unsupported wikitext syntax"));
+        }
+        lines.push(line);
     }
-    if !lines.is_empty() {
-        paragraphs.push(html_escape::decode_html_entities(&lines.join("\n")).into_owned());
-    }
-    Ok(Document { paragraphs })
+    flush_paragraph(&mut blocks, &mut lines);
+    Ok(Document { blocks })
 }
 
 fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
-    let mut paragraphs = Vec::new();
-    let mut current: Option<String> = None;
+    let mut blocks = Vec::new();
+    let mut current: Option<Block> = None;
     let options = Options::ENABLE_GFM
         | Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
     for event in Parser::new_ext(input, options) {
         match event {
-            Event::Start(Tag::Paragraph) if current.is_none() => current = Some(String::new()),
-            Event::End(TagEnd::Paragraph) => paragraphs.push(
-                current
-                    .take()
-                    .ok_or_else(|| ConversionError::new("invalid paragraph"))?,
-            ),
-            Event::Text(text) if current.is_some() => current.as_mut().unwrap().push_str(&text),
-            Event::SoftBreak if current.is_some() => current.as_mut().unwrap().push('\n'),
+            Event::Start(Tag::Paragraph) if current.is_none() => {
+                current = Some(Block::Paragraph(String::new()))
+            }
+            Event::Start(Tag::Heading { level, .. }) if current.is_none() => {
+                current = Some(Block::Heading {
+                    level: level as u8,
+                    text: String::new(),
+                })
+            }
+            Event::End(TagEnd::Paragraph) if matches!(current, Some(Block::Paragraph(_))) => {
+                blocks.push(current.take().unwrap())
+            }
+            Event::End(TagEnd::Heading(_)) if matches!(current, Some(Block::Heading { .. })) => {
+                blocks.push(current.take().unwrap())
+            }
+            Event::Text(text) => match &mut current {
+                Some(Block::Paragraph(s) | Block::Heading { text: s, .. }) => s.push_str(&text),
+                _ => return Err(ConversionError::new("unsupported GFM text")),
+            },
+            Event::SoftBreak => match &mut current {
+                Some(Block::Paragraph(s) | Block::Heading { text: s, .. }) => s.push('\n'),
+                _ => return Err(ConversionError::new("unsupported GFM break")),
+            },
             _ => return Err(ConversionError::new("unsupported GFM syntax")),
         }
     }
-    Ok(Document { paragraphs })
+    Ok(Document { blocks })
 }
 
 fn parse_html(input: &str) -> Result<Document, ConversionError> {
-    let fragment = Html::parse_fragment(input);
-    let root = fragment.root_element();
-    let mut paragraphs = Vec::new();
-    for child in root.children() {
-        match child.value() {
-            Node::Text(text) if text.trim().is_empty() => {}
-            Node::Element(element) if element.name() == "p" => {
-                let mut paragraph = String::new();
-                for node in child.children() {
-                    match node.value() {
-                        Node::Text(text) => paragraph.push_str(text),
-                        Node::Comment(_) => {}
-                        _ => {
-                            return Err(ConversionError::new(
-                                "unsupported HTML content inside paragraph",
-                            ))
+    fn children(
+        parent: scraper::ElementRef<'_>,
+        blocks: &mut Vec<Block>,
+    ) -> Result<(), ConversionError> {
+        for child in parent.children() {
+            match child.value() {
+                Node::Text(text) if text.trim().is_empty() => {}
+                Node::Comment(_) => {}
+                Node::Element(element) if element.name() == "section" => {
+                    children(scraper::ElementRef::wrap(child).unwrap(), blocks)?
+                }
+                Node::Element(element)
+                    if element.name() == "p"
+                        || matches!(element.name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") =>
+                {
+                    let mut text = String::new();
+                    for node in child.children() {
+                        match node.value() {
+                            Node::Text(t) => text.push_str(t),
+                            Node::Comment(_) => {}
+                            _ => {
+                                return Err(ConversionError::new(
+                                    "unsupported HTML content inside block",
+                                ))
+                            }
                         }
                     }
+                    let normalized = text
+                        .split([' ', '\t', '\n', '\r', '\u{000C}'])
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if element.name() == "p" {
+                        if normalized.is_empty() {
+                            return Err(ConversionError::new(
+                                "empty HTML paragraphs are unsupported",
+                            ));
+                        }
+                        blocks.push(Block::Paragraph(normalized));
+                    } else {
+                        blocks.push(Block::Heading {
+                            level: element.name().as_bytes()[1] - b'0',
+                            text: normalized,
+                        });
+                    }
                 }
-                // HTML collapses whitespace in normal paragraph text.
-                let normalized = paragraph
-                    .split([' ', '\t', '\n', '\r', '\u{000C}'])
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if normalized.is_empty() {
-                    return Err(ConversionError::new(
-                        "empty HTML paragraphs are unsupported",
-                    ));
-                }
-                paragraphs.push(normalized);
+                _ => return Err(ConversionError::new("unsupported HTML content")),
             }
-            Node::Comment(_) => {}
-            _ => return Err(ConversionError::new("unsupported HTML content")),
         }
+        Ok(())
     }
-    Ok(Document { paragraphs })
+    let fragment = Html::parse_fragment(input);
+    let mut blocks = Vec::new();
+    children(fragment.root_element(), &mut blocks)?;
+    Ok(Document { blocks })
 }
 
 fn escape_wikitext(text: &str) -> String {

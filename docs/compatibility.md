@@ -9,9 +9,10 @@ python scripts/fetch-compatibility.py
 cargo test --locked --test conversion pinned_parser_cases -- --ignored --nocapture
 ```
 
-The tests compare normalized HTML against the expected Parsoid DOM in the release's parser fixtures. The `html/parsoid` section takes precedence over a shared `html` section when both are present. Normalization collapses HTML whitespace in the text and preserves paragraph boundaries. The fixture data is read from the verified archive.
+The tests compare normalized HTML against the expected DOM in the release's parser fixtures. The `html/parsoid` section takes precedence when available. For legacy heading fixtures, the comparison takes the heading from its MediaWiki editing wrapper. Normalization collapses HTML whitespace in the text and preserves paragraph boundaries and the heading outline. The fixture data is read from the verified archive.
 
 | Coverage | Fixture file in MediaWiki 1.46.2 | Case titles |
 | --- | --- | --- |
 | Paragraphs | `tests/parser/parserTests.txt` | `Blank input`, `Simple paragraph` |
 | Paragraph boundaries | `vendor/wikimedia/parsoid/tests/parser/pWrapping.txt` | `No block tags` |
+| Heading outline | `vendor/wikimedia/parsoid/tests/parser/headings.txt` | `Basic section headings` |

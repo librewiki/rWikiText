@@ -5,7 +5,7 @@ use std::process::{Command, Output, Stdio};
 
 use pulldown_cmark::{html, Options, Parser};
 use rwikitext::{convert, ConversionRequest, Format, WikiContext};
-use scraper::Html;
+use scraper::{ElementRef, Html};
 
 const CONTEXT: WikiContext<'static> = WikiContext {
     page_title: "Parser test",
@@ -79,45 +79,63 @@ fn render_gfm(input: &str) -> String {
     html
 }
 
-fn paragraphs(input: &str) -> Vec<String> {
-    Html::parse_fragment(input)
-        .root_element()
-        .child_elements()
-        .map(|element| {
-            assert_eq!(element.value().name(), "p");
+fn document_structure(input: &str) -> Vec<(String, String)> {
+    fn blocks(parent: ElementRef<'_>, output: &mut Vec<(String, String)>) {
+        for mut element in parent.child_elements() {
+            if element.value().name() == "section" {
+                blocks(element, output);
+                continue;
+            }
+            if element.value().classes().any(|class| class == "mw-heading") {
+                element = element
+                    .child_elements()
+                    .next()
+                    .expect("heading in MediaWiki wrapper");
+            }
             assert_eq!(element.child_elements().count(), 0);
-            element
-                .text()
-                .collect::<String>()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect()
+            let text = element.text().collect::<String>();
+            output.push((
+                element.value().name().into(),
+                text.split_ascii_whitespace().collect::<Vec<_>>().join(" "),
+            ));
+        }
+    }
+
+    let mut output = Vec::new();
+    blocks(Html::parse_fragment(input).root_element(), &mut output);
+    output
 }
 
-fn assert_paragraph_conversions(convert: fn(Format, Format, &str) -> String) {
+fn assert_document_conversions(
+    convert: fn(Format, Format, &str) -> String,
+    wikitext: &str,
+    gfm: &str,
+    html: &str,
+) {
     use Format::{Gfm, Html, Wikitext};
 
-    let expected = paragraphs(HTML);
-    let render_wikitext = |wikitext: &str| paragraphs(&convert(Wikitext, Html, wikitext));
+    let expected = document_structure(html);
+    let render_wikitext = |wikitext: &str| document_structure(&convert(Wikitext, Html, wikitext));
 
-    let markdown = convert(Wikitext, Gfm, WIKITEXT);
-    let html = convert(Wikitext, Html, WIKITEXT);
-    assert_eq!(paragraphs(&render_gfm(&markdown)), expected);
-    assert_eq!(paragraphs(&html), expected);
-    assert_eq!(render_wikitext(&convert(Gfm, Wikitext, GFM)), expected);
-    assert_eq!(render_wikitext(&convert(Html, Wikitext, HTML)), expected);
+    let markdown = convert(Wikitext, Gfm, wikitext);
+    let exported_html = convert(Wikitext, Html, wikitext);
+    assert_eq!(document_structure(&render_gfm(&markdown)), expected);
+    assert_eq!(document_structure(&exported_html), expected);
+    assert_eq!(render_wikitext(&convert(Gfm, Wikitext, gfm)), expected);
+    assert_eq!(render_wikitext(&convert(Html, Wikitext, html)), expected);
     assert_eq!(
         render_wikitext(&convert(Gfm, Wikitext, &markdown)),
         expected
     );
-    assert_eq!(render_wikitext(&convert(Html, Wikitext, &html)), expected);
+    assert_eq!(
+        render_wikitext(&convert(Html, Wikitext, &exported_html)),
+        expected
+    );
 }
 
 #[test]
 fn api_converts_and_round_trips_paragraphs() {
-    assert_paragraph_conversions(api);
+    assert_document_conversions(api, WIKITEXT, GFM, HTML);
 }
 
 #[test]
@@ -132,15 +150,35 @@ fn imported_paragraphs_preserve_literal_punctuation() {
     ] {
         let wikitext = api(source, Wikitext, input);
         assert_eq!(
-            paragraphs(&api(Wikitext, Html, &wikitext)),
-            paragraphs(&expected)
+            document_structure(&api(Wikitext, Html, &wikitext)),
+            document_structure(&expected)
         );
     }
 }
 
 #[test]
 fn cli_converts_and_round_trips_paragraphs_from_stdin() {
-    assert_paragraph_conversions(cli);
+    assert_document_conversions(cli, WIKITEXT, GFM, HTML);
+}
+
+#[test]
+fn api_and_cli_preserve_heading_levels_text_and_placement() {
+    let wiki = "= One =\nIntro text.\n== Two ==\n=== Three & more ===\n==== Four ====\nAfter four.\n===== Five =====\n====== Six ======\nClosing text.";
+    let gfm = "One\n===\nIntro text.\n## Two\n### Three & more\n#### Four\nAfter four.\n##### Five\n###### Six\nClosing text.";
+    let html = "<h1>One</h1><p>Intro text.</p><h2>Two</h2><h3>Three &amp; more</h3><h4>Four</h4><p>After four.</p><h5>Five</h5><h6>Six</h6><p>Closing text.</p>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
+fn asymmetric_wikitext_heading_keeps_extra_equals_in_the_label() {
+    let expected = document_structure("<h2>= Heading</h2>");
+    for convert in [api, cli] {
+        let output = convert(Format::Wikitext, Format::Html, "=== Heading ==");
+        assert_eq!(document_structure(&output), expected);
+    }
 }
 
 #[test]
@@ -153,7 +191,10 @@ fn cli_reads_files_and_writes_only_content_to_stdout() {
         .stdin(Stdio::null())
         .output()
         .expect("read CLI file input");
-    assert_eq!(paragraphs(&stdout(output)), paragraphs(HTML));
+    assert_eq!(
+        document_structure(&stdout(output)),
+        document_structure(HTML)
+    );
 }
 
 #[test]
@@ -217,13 +258,17 @@ fn pinned_parser_cases() {
             "vendor/wikimedia/parsoid/tests/parser/pWrapping.txt",
             "No block tags",
         ),
+        (
+            "vendor/wikimedia/parsoid/tests/parser/headings.txt",
+            "Basic section headings",
+        ),
     ];
     for (path, title) in cases {
         let source = fs::read_to_string(release.join(path)).expect("read pinned parser cases");
         let (wikitext, expected) = parser_case(&source, title);
         assert_eq!(
-            paragraphs(&api(Format::Wikitext, Format::Html, &wikitext)),
-            paragraphs(&expected),
+            document_structure(&api(Format::Wikitext, Format::Html, &wikitext)),
+            document_structure(&expected),
             "{path}: {title}"
         );
         println!("{path}: {title}");
