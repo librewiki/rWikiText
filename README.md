@@ -1,6 +1,6 @@
 # rWikiText
 
-rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs and headings at levels one through six.
+rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs, headings at levels one through six, and basic wiki and HTTP(S) links. Wiki links use Parsoid-style relative destinations such as `./Main_Page` in both HTML and GFM. Same-page links use fragments such as `#Local_section`.
 
 ```sh
 cargo run -- wikitext html input.wiki

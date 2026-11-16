@@ -1,3 +1,6 @@
+mod inline;
+
+use inline::Inline;
 use std::fmt;
 use std::str::FromStr;
 
@@ -86,8 +89,8 @@ struct Document {
 }
 
 enum Block {
-    Paragraph(String),
-    Heading { level: u8, text: String },
+    Paragraph(Vec<Inline>),
+    Heading { level: u8, text: Vec<Inline> },
 }
 
 pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, ConversionError> {
@@ -99,7 +102,7 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
         return Err(ConversionError::new("unsupported conversion direction"));
     }
     let document = match request.source {
-        Format::Wikitext => parse_wikitext(request.input)?,
+        Format::Wikitext => parse_wikitext(request.input, request.context.site_language)?,
         Format::Gfm => parse_gfm(request.input)?,
         Format::Html => parse_html(request.input)?,
     };
@@ -108,20 +111,28 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
         .blocks
         .iter()
         .map(|block| match (request.target, block) {
-            (Format::Wikitext, Block::Paragraph(text)) => escape_wikitext(text),
+            (Format::Wikitext, Block::Paragraph(text)) => render_inline(text, Format::Wikitext),
             (Format::Wikitext, Block::Heading { level, text }) => {
                 let delimiter = "=".repeat(*level as usize);
-                format!("{delimiter} {} {delimiter}", escape_wikitext(text))
+                format!(
+                    "{delimiter} {} {delimiter}",
+                    render_inline(text, Format::Wikitext)
+                )
             }
-            (Format::Gfm, Block::Paragraph(text)) => escape_gfm(text),
+            (Format::Gfm, Block::Paragraph(text)) => render_inline(text, Format::Gfm),
             (Format::Gfm, Block::Heading { level, text }) => {
-                format!("{} {}", "#".repeat(*level as usize), escape_gfm(text))
+                format!(
+                    "{} {}",
+                    "#".repeat(*level as usize),
+                    render_inline(text, Format::Gfm)
+                )
             }
             (Format::Html, Block::Paragraph(text)) => {
-                format!("<p>{}</p>", html_escape::encode_text(text))
+                format!("<p>{}</p>", render_inline(text, Format::Html))
             }
             (Format::Html, Block::Heading { level, text }) => {
-                let base = text.split_whitespace().collect::<Vec<_>>().join("_");
+                let plain = inline::plain(text);
+                let base = plain.split_whitespace().collect::<Vec<_>>().join("_");
                 let mut id = base.clone();
                 let mut suffix = 2;
                 while !ids.insert(id.to_lowercase()) {
@@ -131,7 +142,7 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
                 format!(
                     "<h{level} id=\"{}\">{}</h{level}>",
                     html_escape::encode_double_quoted_attribute(&id),
-                    html_escape::encode_text(text)
+                    render_inline(text, Format::Html)
                 )
             }
         })
@@ -148,16 +159,22 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
     })
 }
 
-fn flush_paragraph(blocks: &mut Vec<Block>, lines: &mut Vec<&str>) {
+fn flush_paragraph(
+    blocks: &mut Vec<Block>,
+    lines: &mut Vec<&str>,
+    language: &str,
+) -> Result<(), ConversionError> {
     if !lines.is_empty() {
-        blocks.push(Block::Paragraph(
-            html_escape::decode_html_entities(&lines.join("\n")).into_owned(),
-        ));
+        blocks.push(Block::Paragraph(inline::parse_wiki(
+            &lines.join("\n"),
+            language,
+        )?));
         lines.clear();
     }
+    Ok(())
 }
 
-fn parse_wikitext(input: &str) -> Result<Document, ConversionError> {
+fn parse_wikitext(input: &str, language: &str) -> Result<Document, ConversionError> {
     let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
     let mut blocks = Vec::new();
     let mut lines = Vec::new();
@@ -165,7 +182,7 @@ fn parse_wikitext(input: &str) -> Result<Document, ConversionError> {
     for line in normalized.split('\n') {
         if line.trim().is_empty() {
             blank_lines += 1;
-            flush_paragraph(&mut blocks, &mut lines);
+            flush_paragraph(&mut blocks, &mut lines, language)?;
             continue;
         }
         if !blocks.is_empty() && blank_lines > 1 {
@@ -187,39 +204,33 @@ fn parse_wikitext(input: &str) -> Result<Document, ConversionError> {
             start.min(end).min(6)
         };
         if level > 0 {
-            flush_paragraph(&mut blocks, &mut lines);
+            flush_paragraph(&mut blocks, &mut lines, language)?;
             let text = &heading_line[level..heading_line.len() - level];
-            if text.contains("[[")
-                || text.contains("{{")
-                || text.contains("''")
-                || text.contains('<')
-            {
-                return Err(ConversionError::new("unsupported wikitext heading syntax"));
-            }
             blocks.push(Block::Heading {
                 level: level as u8,
-                text: html_escape::decode_html_entities(text.trim()).into_owned(),
+                text: inline::parse_wiki(text.trim(), language)?,
             });
             continue;
         }
-        if line.starts_with([' ', '\t', '*', '#', ';', ':'])
-            || line.starts_with("----")
-            || line.contains("[[")
-            || line.contains("{{")
-            || line.contains("''")
-            || line.contains('<')
-        {
+        if line.starts_with([' ', '\t', '*', '#', ';', ':']) || line.starts_with("----") {
             return Err(ConversionError::new("unsupported wikitext syntax"));
         }
         lines.push(line);
     }
-    flush_paragraph(&mut blocks, &mut lines);
+    flush_paragraph(&mut blocks, &mut lines, language)?;
     Ok(Document { blocks })
+}
+
+fn block_inlines(block: &mut Block) -> &mut Vec<Inline> {
+    match block {
+        Block::Paragraph(text) | Block::Heading { text, .. } => text,
+    }
 }
 
 fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
     let mut blocks = Vec::new();
     let mut current: Option<Block> = None;
+    let mut link: Option<(String, String)> = None;
     let options = Options::ENABLE_GFM
         | Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -227,28 +238,45 @@ fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
     for event in Parser::new_ext(input, options) {
         match event {
             Event::Start(Tag::Paragraph) if current.is_none() => {
-                current = Some(Block::Paragraph(String::new()))
+                current = Some(Block::Paragraph(Vec::new()))
             }
             Event::Start(Tag::Heading { level, .. }) if current.is_none() => {
                 current = Some(Block::Heading {
                     level: level as u8,
-                    text: String::new(),
+                    text: Vec::new(),
                 })
             }
-            Event::End(TagEnd::Paragraph) if matches!(current, Some(Block::Paragraph(_))) => {
+            Event::End(TagEnd::Paragraph)
+                if matches!(current, Some(Block::Paragraph(_))) && link.is_none() =>
+            {
                 blocks.push(current.take().unwrap())
             }
-            Event::End(TagEnd::Heading(_)) if matches!(current, Some(Block::Heading { .. })) => {
+            Event::End(TagEnd::Heading(_))
+                if matches!(current, Some(Block::Heading { .. })) && link.is_none() =>
+            {
                 blocks.push(current.take().unwrap())
             }
-            Event::Text(text) => match &mut current {
-                Some(Block::Paragraph(s) | Block::Heading { text: s, .. }) => s.push_str(&text),
-                _ => return Err(ConversionError::new("unsupported GFM text")),
-            },
-            Event::SoftBreak => match &mut current {
-                Some(Block::Paragraph(s) | Block::Heading { text: s, .. }) => s.push('\n'),
-                _ => return Err(ConversionError::new("unsupported GFM break")),
-            },
+            Event::Start(Tag::Link {
+                dest_url, title, ..
+            }) if current.is_some() && link.is_none() && title.is_empty() => {
+                link = Some((dest_url.into_string(), String::new()))
+            }
+            Event::End(TagEnd::Link) if link.is_some() => {
+                let (href, label) = link.take().unwrap();
+                block_inlines(current.as_mut().unwrap()).push(inline::from_href(&href, label)?);
+            }
+            Event::Text(value) => {
+                if let Some((_, label)) = &mut link {
+                    label.push_str(&value);
+                } else if let Some(block) = &mut current {
+                    inline::text(block_inlines(block), &value);
+                } else {
+                    return Err(ConversionError::new("unsupported GFM text"));
+                }
+            }
+            Event::SoftBreak if link.is_none() && current.is_some() => {
+                inline::text(block_inlines(current.as_mut().unwrap()), "\n")
+            }
             _ => return Err(ConversionError::new("unsupported GFM syntax")),
         }
     }
@@ -256,6 +284,22 @@ fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
 }
 
 fn parse_html(input: &str) -> Result<Document, ConversionError> {
+    fn normalized(text: &str) -> String {
+        let mut output = String::new();
+        let mut space = false;
+        for c in text.chars() {
+            if matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000C}') {
+                if !space {
+                    output.push(' ');
+                }
+                space = true;
+            } else {
+                output.push(c);
+                space = false;
+            }
+        }
+        output
+    }
     fn children(
         parent: scraper::ElementRef<'_>,
         blocks: &mut Vec<Block>,
@@ -271,11 +315,29 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
                     if element.name() == "p"
                         || matches!(element.name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") =>
                 {
-                    let mut text = String::new();
+                    let mut content = Vec::new();
                     for node in child.children() {
                         match node.value() {
-                            Node::Text(t) => text.push_str(t),
+                            Node::Text(value) => inline::text(&mut content, &normalized(value)),
                             Node::Comment(_) => {}
+                            Node::Element(anchor) if anchor.name() == "a" => {
+                                let href = anchor
+                                    .attr("href")
+                                    .ok_or_else(|| ConversionError::new("link has no href"))?;
+                                let mut label = String::new();
+                                for item in node.children() {
+                                    match item.value() {
+                                        Node::Text(value) => label.push_str(value),
+                                        Node::Comment(_) => {}
+                                        _ => {
+                                            return Err(ConversionError::new(
+                                                "unsupported link label",
+                                            ))
+                                        }
+                                    }
+                                }
+                                content.push(inline::from_href(href, normalized(&label))?);
+                            }
                             _ => {
                                 return Err(ConversionError::new(
                                     "unsupported HTML content inside block",
@@ -283,22 +345,23 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
                             }
                         }
                     }
-                    let normalized = text
-                        .split([' ', '\t', '\n', '\r', '\u{000C}'])
-                        .filter(|part| !part.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    if let Some(Inline::Text(first)) = content.first_mut() {
+                        *first = first.trim_start_matches(' ').to_string();
+                    }
+                    if let Some(Inline::Text(last)) = content.last_mut() {
+                        *last = last.trim_end_matches(' ').to_string();
+                    }
                     if element.name() == "p" {
-                        if normalized.is_empty() {
+                        if inline::plain(&content).is_empty() {
                             return Err(ConversionError::new(
                                 "empty HTML paragraphs are unsupported",
                             ));
                         }
-                        blocks.push(Block::Paragraph(normalized));
+                        blocks.push(Block::Paragraph(content));
                     } else {
                         blocks.push(Block::Heading {
                             level: element.name().as_bytes()[1] - b'0',
-                            text: normalized,
+                            text: content,
                         });
                     }
                 }
@@ -311,6 +374,54 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
     let mut blocks = Vec::new();
     children(fragment.root_element(), &mut blocks)?;
     Ok(Document { blocks })
+}
+
+fn render_inline(content: &[Inline], format: Format) -> String {
+    let mut output = String::new();
+    for part in content {
+        match part {
+            Inline::Text(text) => match format {
+                Format::Wikitext => output.push_str(&escape_wikitext(text)),
+                Format::Gfm => output.push_str(&escape_gfm(text)),
+                Format::Html => output.push_str(&html_escape::encode_text(text)),
+            },
+            Inline::Link {
+                href,
+                label,
+                internal,
+            } => match format {
+                Format::Wikitext if *internal => {
+                    let target = inline::wiki_target(href).expect("validated wiki href");
+                    output.push_str(&format!(
+                        "[[{}|{}]]",
+                        target.replace('&', "&amp;"),
+                        escape_wikitext(label)
+                    ));
+                }
+                Format::Wikitext => output.push_str(&format!(
+                    "[{} {}]",
+                    href.replace('&', "&amp;"),
+                    escape_wikitext(label)
+                )),
+                Format::Gfm => output.push_str(&format!(
+                    "[{}](<{}>)",
+                    escape_gfm(label),
+                    href.replace('&', "&amp;")
+                )),
+                Format::Html => output.push_str(&format!(
+                    "<a rel=\"{}\" href=\"{}\">{}</a>",
+                    if *internal {
+                        "mw:WikiLink"
+                    } else {
+                        "mw:ExtLink"
+                    },
+                    html_escape::encode_double_quoted_attribute(href),
+                    html_escape::encode_text(label)
+                )),
+            },
+        }
+    }
+    output
 }
 
 fn escape_wikitext(text: &str) -> String {
