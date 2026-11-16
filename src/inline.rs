@@ -50,7 +50,7 @@ fn encode_component(input: &str) -> String {
     }
     out
 }
-fn decode_component(input: &str) -> Result<String, ConversionError> {
+pub(crate) fn decode_component(input: &str) -> Result<String, ConversionError> {
     let mut bytes = Vec::new();
     let mut it = input.as_bytes().iter().copied();
     while let Some(c) = it.next() {
@@ -69,15 +69,35 @@ fn decode_component(input: &str) -> Result<String, ConversionError> {
     String::from_utf8(bytes).map_err(|_| ConversionError::new("invalid URL encoding"))
 }
 fn normalize_title(title: &str) -> String {
-    let clean = title.replace('_', " ");
-    let clean = clean.split_whitespace().collect::<Vec<_>>().join("_");
-    let mut chars = clean.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => clean,
+    fn uppercase_first(value: &str) -> String {
+        let mut chars = value.chars();
+        chars.next().map_or_else(String::new, |first| {
+            first.to_uppercase().chain(chars).collect()
+        })
     }
+
+    let title = normalize_fragment(title);
+    if let Some((prefix, name)) = title.split_once(':') {
+        let namespace = match prefix.to_ascii_lowercase().as_str() {
+            "talk" => "Talk",
+            "user" => "User",
+            "user_talk" => "User_talk",
+            "mediawiki" => "MediaWiki",
+            "mediawiki_talk" => "MediaWiki_talk",
+            "template" => "Template",
+            "template_talk" => "Template_talk",
+            "help" => "Help",
+            "help_talk" => "Help_talk",
+            "file_talk" | "image_talk" => "File_talk",
+            "category_talk" => "Category_talk",
+            _ => return uppercase_first(&title),
+        };
+        let name = uppercase_first(name.trim_start_matches('_'));
+        return format!("{namespace}:{name}");
+    }
+    uppercase_first(&title)
 }
-fn normalize_fragment(fragment: &str) -> String {
+pub(crate) fn normalize_fragment(fragment: &str) -> String {
     fragment
         .replace('_', " ")
         .split_whitespace()
@@ -114,6 +134,10 @@ fn internal_href(target: &str) -> Result<String, ConversionError> {
     }
     Ok(href)
 }
+fn invalid_url_character(c: char) -> bool {
+    c.is_control() || c.is_whitespace() || matches!(c, '<' | '>' | '"' | '[' | ']' | '\\')
+}
+
 fn external_valid(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     let host = if lower.starts_with("https://") {
@@ -125,9 +149,7 @@ fn external_valid(url: &str) -> bool {
     };
     !host.is_empty()
         && !host.starts_with(['/', '?', '#'])
-        && !url.chars().any(|c| {
-            c.is_control() || c.is_whitespace() || matches!(c, '<' | '>' | '"' | '[' | ']' | '\\')
-        })
+        && !url.chars().any(invalid_url_character)
 }
 pub(crate) fn from_href(href: &str, label: String) -> Result<Inline, ConversionError> {
     if label.is_empty() {
@@ -161,6 +183,57 @@ fn decoded(input: &str) -> String {
     html_escape::decode_html_entities(input).into_owned()
 }
 
+fn character_reference(input: &str) -> Option<(&str, String)> {
+    let name = input.strip_prefix('&')?;
+    let end = name
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'#')
+        .count();
+    if name.as_bytes().get(end) != Some(&b';') {
+        return None;
+    }
+    let source = &input[..end + 2];
+    let value = decoded(source);
+    (value != source).then_some((source, value))
+}
+
+fn bare_external(input: &str, position: usize) -> Option<(&str, String)> {
+    let suffix = &input[position..];
+    if !(suffix.starts_with("http://") || suffix.starts_with("https://"))
+        || input[..position]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+
+    let mut length = 0;
+    let mut last_entity_end = 0;
+    while let Some(c) = suffix[length..].chars().next() {
+        if invalid_url_character(c) || c == '{' || suffix[length..].starts_with("''") {
+            break;
+        }
+        if let Some((source, value)) = character_reference(&suffix[length..]) {
+            if value.chars().any(invalid_url_character) {
+                break;
+            }
+            length += source.len();
+            last_entity_end = length;
+        } else {
+            length += c.len_utf8();
+        }
+    }
+
+    let has_left_parenthesis = suffix[..length].contains('(');
+    let tail = suffix[last_entity_end..length].trim_end_matches(|c| {
+        matches!(c, '.' | ',' | ';' | ':' | '!' | '?') || (c == ')' && !has_left_parenthesis)
+    });
+    let source = &suffix[..last_entity_end + tail.len()];
+    let url = decoded(source);
+    external_valid(&url).then_some((source, url))
+}
+
 pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, ConversionError> {
     let mut out = Vec::new();
     let mut pos = 0;
@@ -173,10 +246,10 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
             let link = &body[..end];
             let (target, label) = match link.split_once('|') {
                 Some((target, label)) if !label.contains('|') && !label.is_empty() => {
-                    (target, decoded(label))
+                    (target, label)
                 }
                 Some(_) => return Err(ConversionError::new("unsupported wikilink label")),
-                None => (link, decoded(&link.replace('_', " "))),
+                None => (link, link),
             };
             if label.contains("[[")
                 || label.contains("{{")
@@ -205,7 +278,7 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
                     "linktrails for this site language are unsupported",
                 ));
             }
-            let mut label = label;
+            let mut label = decoded(label);
             label.push_str(&body[end + 2..end + 2 + trail_len]);
             out.push(Inline::Link {
                 href: internal_href(&target)?,
@@ -221,58 +294,39 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
             let (url, label) = body
                 .split_once(char::is_whitespace)
                 .ok_or_else(|| ConversionError::new("external links require a label"))?;
-            let label = decoded(label.trim());
+            let label = label.trim_start();
             let url = decoded(url);
-            if !external_valid(&url) || label.is_empty() || label.contains(['[', ']', '<']) {
+            if !external_valid(&url)
+                || label.is_empty()
+                || label.contains(['[', ']', '<'])
+                || label.contains("{{")
+                || label.contains("''")
+            {
                 return Err(ConversionError::new("invalid external link"));
             }
             out.push(Inline::Link {
                 href: url,
-                label,
+                label: decoded(label),
                 internal: false,
             });
             pos += end + 1;
-        } else if rest.starts_with("http://") || rest.starts_with("https://") {
-            let end = rest
-                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '[' | ']' | '"'))
-                .unwrap_or(rest.len());
-            let candidate = &rest[..end];
-            let mut trimmed = candidate.trim_end_matches(['.', ',', ';', '!', '?']);
-            while trimmed.ends_with(')')
-                && trimmed.matches(')').count() > trimmed.matches('(').count()
-            {
-                trimmed = &trimmed[..trimmed.len() - 1];
-            }
-            let url = decoded(trimmed);
-            if !external_valid(&url) {
-                return Err(ConversionError::new("invalid external link"));
-            }
+        } else if let Some((source, url)) = bare_external(input, pos) {
             out.push(Inline::Link {
                 href: url.clone(),
                 label: url,
                 internal: false,
             });
-            pos += trimmed.len();
+            pos += source.len();
+        } else if let Some((source, value)) = character_reference(rest) {
+            text(&mut out, &value);
+            pos += source.len();
         } else {
             let ch = rest.chars().next().unwrap();
             if rest.starts_with("{{") || rest.starts_with("''") || ch == '<' {
                 return Err(ConversionError::new("unsupported wikitext syntax"));
             }
-            let start = pos;
             pos += ch.len_utf8();
-            // Decode character references without interpreting their resulting punctuation as markup.
-            if ch == '&' {
-                if let Some(end) = input[start..].find(';') {
-                    let entity = &input[start..start + end + 1];
-                    let value = decoded(entity);
-                    if value != entity {
-                        text(&mut out, &value);
-                        pos = start + end + 1;
-                        continue;
-                    }
-                }
-            }
-            text(&mut out, &input[start..pos]);
+            text(&mut out, &rest[..ch.len_utf8()]);
         }
     }
     Ok(out)

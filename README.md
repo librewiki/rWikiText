@@ -1,6 +1,6 @@
 # rWikiText
 
-rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs, headings at levels one through six, basic wiki and HTTP(S) links, and flat ordered and unordered lists. Ordered lists start at one. Wiki links use Parsoid-style relative destinations such as `./Main_Page` in both HTML and GFM. Same-page links use fragments such as `#Local_section`.
+rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs, headings at levels one through six, basic wiki and HTTP(S) links, and flat ordered and unordered lists. Wikitext paragraphs use one blank line as a separator, and ordered lists start at one. Wiki links use Parsoid-style relative destinations such as `./Main_Page` in both HTML and GFM. Same-page links use fragments such as `#Local_section`.
 
 ```sh
 cargo run -- wikitext html input.wiki

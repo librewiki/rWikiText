@@ -9,7 +9,7 @@ python scripts/fetch-compatibility.py
 cargo test --locked --test conversion pinned_parser_cases -- --ignored --nocapture
 ```
 
-The tests compare normalized HTML against the expected DOM in the release's parser fixtures. The `html/parsoid` section takes precedence when available. For legacy heading fixtures, the comparison takes the heading from its MediaWiki editing wrapper. Normalization collapses HTML whitespace in the text and preserves paragraph boundaries, the heading outline, link labels and destinations, and list type and item order. The fixture data is read from the verified archive.
+The tests compare normalized HTML against the expected DOM in the release's parser fixtures. The `html/parsoid` section takes precedence when available. For legacy heading fixtures, the comparison takes the heading from its MediaWiki editing wrapper. Normalization reads Parsoid entity wrappers as text and collapses HTML whitespace. It preserves paragraph boundaries, the heading outline, link labels and destinations, and list type and item order. The fixture data is read from the verified archive.
 
 | Coverage | Fixture file in MediaWiki 1.46.2 | Case titles |
 | --- | --- | --- |
@@ -17,5 +17,13 @@ The tests compare normalized HTML against the expected DOM in the release's pars
 | Paragraph boundaries | `vendor/wikimedia/parsoid/tests/parser/pWrapping.txt` | `No block tags` |
 | Heading outline | `vendor/wikimedia/parsoid/tests/parser/headings.txt` | `Basic section headings` |
 | Internal link title normalization | `tests/parser/parserTests.txt` | `Multiple spaces in titles should normalize to a single underscore` |
-| Named and bare external links | `vendor/wikimedia/parsoid/tests/parser/extLinks.txt` | `External links: specified text`, `External links: non-bracketed` |
+| Named and bare external links | `vendor/wikimedia/parsoid/tests/parser/extLinks.txt` | `External links: specified text`, `External links: non-bracketed`, `External links: Free with trailing punctuation` |
 | Ordered and unordered lists | `tests/parser/parserTests.txt` | `Simple list`, `Common list`, `Numbered list` |
+
+Run the mixed-document workflow with PHP 8.3 or newer and the DOM, Intl, and Mbstring extensions enabled. The test uses `php` from `PATH` by default. Set `RWIKITEXT_PHP` to use a specific executable. The PHP renderer uses the bundled Parsoid and its local test site configuration.
+
+```sh
+cargo test --locked -- --include-ignored --nocapture
+```
+
+The complete fixtures in `tests/fixtures/milestone.*` cover all four conversions and both wikitext round trips through the Rust API and CLI. The test renders the starting and recovered wikitext with the pinned Parsoid, using the same English test wiki, page title, and reference time. It compares the resulting structure and the intermediate GFM and HTML with the expected HTML fixture. CLI tests also exercise file and standard input and check standard output and standard error.
