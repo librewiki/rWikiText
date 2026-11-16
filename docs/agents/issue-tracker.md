@@ -21,7 +21,7 @@ Specs and tickets live in GitHub Issues for `librewiki/rWikiText`. Use `gh` from
 ### End work
 
 1. When the work session ends, remove `wip` from the associated issue with `gh issue edit <number> --remove-label wip`. Do this for completed, blocked, and interrupted work.
-2. Commit the changes made for the task. Use a categorized subject in the form `<type>: <summary>`, with types such as `feat`, `fix`, `docs`, `refactor`, `test`, and `chore`. After a blank line, describe the changes and the verification performed. Include the names of the tools and models actually used, in a form such as `Tools and models: Codex (GPT-6.1 Sol), Git, GitHub CLI`.
+2. Commit the changes made for the task. Use a categorized subject in the form `<type>: <summary>`, with types such as `feat`, `fix`, `docs`, `refactor`, `test`, and `chore`. After a blank line, describe the changes and the verification performed. Include the names of the agents and models used for the work, for example `Codex(GPT-6.1 Sol)`.
 3. When all acceptance criteria are verified, close the issue, push the work branch, and open a GitHub pull request (PR) in that order. Use the GitFlow target branch and reference the issue as `Refs #<number>` in the PR body. If any acceptance criterion remains unmet or unverified, keep the issue open.
 
 ## Sub-issues and dependencies
