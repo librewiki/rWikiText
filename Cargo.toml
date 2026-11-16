@@ -1,0 +1,9 @@
+[package]
+name = "rwikitext"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pulldown-cmark = "0.13"
+scraper = "0.24"
+html-escape = "0.2"
