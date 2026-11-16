@@ -90,7 +90,14 @@ struct Document {
 
 enum Block {
     Paragraph(Vec<Inline>),
-    Heading { level: u8, text: Vec<Inline> },
+    Heading {
+        level: u8,
+        text: Vec<Inline>,
+    },
+    List {
+        ordered: bool,
+        items: Vec<Vec<Inline>>,
+    },
 }
 
 pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, ConversionError> {
@@ -107,43 +114,94 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
         Format::Html => parse_html(request.input)?,
     };
     let mut ids = std::collections::HashSet::<String>::new();
+    let mut previous_list: Option<(bool, bool)> = None;
     let content = document
         .blocks
         .iter()
-        .map(|block| match (request.target, block) {
-            (Format::Wikitext, Block::Paragraph(text)) => render_inline(text, Format::Wikitext),
-            (Format::Wikitext, Block::Heading { level, text }) => {
-                let delimiter = "=".repeat(*level as usize);
-                format!(
-                    "{delimiter} {} {delimiter}",
-                    render_inline(text, Format::Wikitext)
-                )
-            }
-            (Format::Gfm, Block::Paragraph(text)) => render_inline(text, Format::Gfm),
-            (Format::Gfm, Block::Heading { level, text }) => {
-                format!(
-                    "{} {}",
-                    "#".repeat(*level as usize),
-                    render_inline(text, Format::Gfm)
-                )
-            }
-            (Format::Html, Block::Paragraph(text)) => {
-                format!("<p>{}</p>", render_inline(text, Format::Html))
-            }
-            (Format::Html, Block::Heading { level, text }) => {
-                let plain = inline::plain(text);
-                let base = plain.split_whitespace().collect::<Vec<_>>().join("_");
-                let mut id = base.clone();
-                let mut suffix = 2;
-                while !ids.insert(id.to_lowercase()) {
-                    id = format!("{base}_{suffix}");
-                    suffix += 1;
+        .map(|block| {
+            let alternate = match block {
+                Block::List { ordered, .. } => {
+                    let alternate = previous_list
+                        .map(|(last, alt)| last == *ordered && !alt)
+                        .unwrap_or(false);
+                    previous_list = Some((*ordered, alternate));
+                    alternate
                 }
-                format!(
-                    "<h{level} id=\"{}\">{}</h{level}>",
-                    html_escape::encode_double_quoted_attribute(&id),
-                    render_inline(text, Format::Html)
-                )
+                _ => {
+                    previous_list = None;
+                    false
+                }
+            };
+            match (request.target, block) {
+                (Format::Wikitext, Block::Paragraph(text)) => render_inline(text, Format::Wikitext),
+                (Format::Wikitext, Block::Heading { level, text }) => {
+                    let delimiter = "=".repeat(*level as usize);
+                    format!(
+                        "{delimiter} {} {delimiter}",
+                        render_inline(text, Format::Wikitext)
+                    )
+                }
+                (Format::Gfm, Block::Paragraph(text)) => render_inline(text, Format::Gfm),
+                (Format::Gfm, Block::Heading { level, text }) => {
+                    format!(
+                        "{} {}",
+                        "#".repeat(*level as usize),
+                        render_inline(text, Format::Gfm)
+                    )
+                }
+                (Format::Html, Block::Paragraph(text)) => {
+                    format!("<p>{}</p>", render_inline(text, Format::Html))
+                }
+                (Format::Html, Block::Heading { level, text }) => {
+                    let plain = inline::plain(text);
+                    let base = plain.split_whitespace().collect::<Vec<_>>().join("_");
+                    let mut id = base.clone();
+                    let mut suffix = 2;
+                    while !ids.insert(id.to_lowercase()) {
+                        id = format!("{base}_{suffix}");
+                        suffix += 1;
+                    }
+                    format!(
+                        "<h{level} id=\"{}\">{}</h{level}>",
+                        html_escape::encode_double_quoted_attribute(&id),
+                        render_inline(text, Format::Html)
+                    )
+                }
+                (Format::Wikitext, Block::List { ordered, items }) => items
+                    .iter()
+                    .map(|item| {
+                        format!(
+                            "{} {}",
+                            if *ordered { "#" } else { "*" },
+                            render_inline(item, Format::Wikitext)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                (Format::Gfm, Block::List { ordered, items }) => items
+                    .iter()
+                    .map(|item| {
+                        format!(
+                            "{} {}",
+                            match (*ordered, alternate) {
+                                (false, false) => "-",
+                                (false, true) => "*",
+                                (true, false) => "1.",
+                                (true, true) => "1)",
+                            },
+                            render_inline(item, Format::Gfm)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                (Format::Html, Block::List { ordered, items }) => {
+                    let tag = if *ordered { "ol" } else { "ul" };
+                    let content = items
+                        .iter()
+                        .map(|item| format!("<li>{}</li>", render_inline(item, Format::Html)))
+                        .collect::<String>();
+                    format!("<{tag}>{content}</{tag}>")
+                }
             }
         })
         .collect::<Vec<_>>()
@@ -190,7 +248,27 @@ fn parse_wikitext(input: &str, language: &str) -> Result<Document, ConversionErr
                 "multiple blank lines between blocks are unsupported",
             ));
         }
+        let list_break = blank_lines > 0;
         blank_lines = 0;
+        if line.starts_with(['*', '#']) {
+            flush_paragraph(&mut blocks, &mut lines, language)?;
+            if line[1..].starts_with(['*', '#', ':', ';']) {
+                return Err(ConversionError::new("nested lists are unsupported"));
+            }
+            let ordered = line.starts_with('#');
+            let item = inline::parse_wiki(line[1..].trim_start_matches([' ', '\t']), language)?;
+            match blocks.last_mut() {
+                Some(Block::List {
+                    ordered: existing,
+                    items,
+                }) if *existing == ordered && !list_break => items.push(item),
+                _ => blocks.push(Block::List {
+                    ordered,
+                    items: vec![item],
+                }),
+            }
+            continue;
+        }
         let heading_line = line.trim_end();
         let start = heading_line.bytes().take_while(|&c| c == b'=').count();
         let end = heading_line
@@ -224,6 +302,7 @@ fn parse_wikitext(input: &str, language: &str) -> Result<Document, ConversionErr
 fn block_inlines(block: &mut Block) -> &mut Vec<Inline> {
     match block {
         Block::Paragraph(text) | Block::Heading { text, .. } => text,
+        Block::List { .. } => unreachable!("list items have their own inline content"),
     }
 }
 
@@ -231,16 +310,54 @@ fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
     let mut blocks = Vec::new();
     let mut current: Option<Block> = None;
     let mut link: Option<(String, String)> = None;
+    let mut list: Option<(bool, Vec<Vec<Inline>>)> = None;
+    let mut item: Option<Vec<Inline>> = None;
+    let mut item_paragraph = false;
+    let mut item_had_paragraph = false;
     let options = Options::ENABLE_GFM
         | Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS;
     for event in Parser::new_ext(input, options) {
         match event {
-            Event::Start(Tag::Paragraph) if current.is_none() => {
+            Event::Start(Tag::List(start))
+                if current.is_none() && list.is_none() && item.is_none() =>
+            {
+                if start.is_some_and(|value| value != 1) {
+                    return Err(ConversionError::new("ordered lists must start at 1"));
+                }
+                list = Some((start.is_some(), Vec::new()));
+            }
+            Event::End(TagEnd::List(_)) if list.is_some() && item.is_none() => {
+                let (ordered, items) = list.take().unwrap();
+                if items.is_empty() {
+                    return Err(ConversionError::new("empty lists are unsupported"));
+                }
+                blocks.push(Block::List { ordered, items });
+            }
+            Event::Start(Tag::Item) if list.is_some() && item.is_none() => {
+                item = Some(Vec::new());
+                item_had_paragraph = false;
+            }
+            Event::End(TagEnd::Item) if item.is_some() && !item_paragraph && link.is_none() => {
+                list.as_mut().unwrap().1.push(item.take().unwrap())
+            }
+            Event::Start(Tag::Paragraph)
+                if item.is_some()
+                    && !item_paragraph
+                    && !item_had_paragraph
+                    && item.as_ref().unwrap().is_empty() =>
+            {
+                item_paragraph = true;
+                item_had_paragraph = true;
+            }
+            Event::End(TagEnd::Paragraph) if item_paragraph && link.is_none() => {
+                item_paragraph = false
+            }
+            Event::Start(Tag::Paragraph) if current.is_none() && list.is_none() => {
                 current = Some(Block::Paragraph(Vec::new()))
             }
-            Event::Start(Tag::Heading { level, .. }) if current.is_none() => {
+            Event::Start(Tag::Heading { level, .. }) if current.is_none() && list.is_none() => {
                 current = Some(Block::Heading {
                     level: level as u8,
                     text: Vec::new(),
@@ -258,21 +375,36 @@ fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
             }
             Event::Start(Tag::Link {
                 dest_url, title, ..
-            }) if current.is_some() && link.is_none() && title.is_empty() => {
+            }) if (current.is_some() || item.is_some()) && link.is_none() && title.is_empty() => {
                 link = Some((dest_url.into_string(), String::new()))
             }
             Event::End(TagEnd::Link) if link.is_some() => {
                 let (href, label) = link.take().unwrap();
-                block_inlines(current.as_mut().unwrap()).push(inline::from_href(&href, label)?);
+                let target = if let Some(item) = &mut item {
+                    item
+                } else {
+                    block_inlines(current.as_mut().unwrap())
+                };
+                target.push(inline::from_href(&href, label)?);
             }
             Event::Text(value) => {
                 if let Some((_, label)) = &mut link {
                     label.push_str(&value);
+                } else if let Some(item) = &mut item {
+                    if item_had_paragraph && !item_paragraph {
+                        return Err(ConversionError::new(
+                            "multiple list item blocks are unsupported",
+                        ));
+                    }
+                    inline::text(item, &value);
                 } else if let Some(block) = &mut current {
                     inline::text(block_inlines(block), &value);
                 } else {
                     return Err(ConversionError::new("unsupported GFM text"));
                 }
+            }
+            Event::SoftBreak if link.is_none() && item.is_some() => {
+                inline::text(item.as_mut().unwrap(), " ")
             }
             Event::SoftBreak if link.is_none() && current.is_some() => {
                 inline::text(block_inlines(current.as_mut().unwrap()), "\n")
@@ -300,6 +432,41 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
         }
         output
     }
+    fn parse_inlines(parent: scraper::ElementRef<'_>) -> Result<Vec<Inline>, ConversionError> {
+        let mut content = Vec::new();
+        for node in parent.children() {
+            match node.value() {
+                Node::Text(value) => inline::text(&mut content, &normalized(value)),
+                Node::Comment(_) => {}
+                Node::Element(anchor) if anchor.name() == "a" => {
+                    let href = anchor
+                        .attr("href")
+                        .ok_or_else(|| ConversionError::new("link has no href"))?;
+                    let mut label = String::new();
+                    for item in node.children() {
+                        match item.value() {
+                            Node::Text(value) => label.push_str(value),
+                            Node::Comment(_) => {}
+                            _ => return Err(ConversionError::new("unsupported link label")),
+                        }
+                    }
+                    content.push(inline::from_href(href, normalized(&label))?);
+                }
+                _ => {
+                    return Err(ConversionError::new(
+                        "unsupported HTML content inside block",
+                    ))
+                }
+            }
+        }
+        if let Some(Inline::Text(first)) = content.first_mut() {
+            *first = first.trim_start_matches(' ').to_string();
+        }
+        if let Some(Inline::Text(last)) = content.last_mut() {
+            *last = last.trim_end_matches(' ').to_string();
+        }
+        Ok(content)
+    }
     fn children(
         parent: scraper::ElementRef<'_>,
         blocks: &mut Vec<Block>,
@@ -311,46 +478,54 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
                 Node::Element(element) if element.name() == "section" => {
                     children(scraper::ElementRef::wrap(child).unwrap(), blocks)?
                 }
+                Node::Element(element) if element.name() == "ul" || element.name() == "ol" => {
+                    let ordered = element.name() == "ol";
+                    if ordered
+                        && element
+                            .attr("start")
+                            .is_some_and(|start| start.trim() != "1")
+                    {
+                        return Err(ConversionError::new("ordered lists must start at 1"));
+                    }
+                    if element.attr("reversed").is_some() {
+                        return Err(ConversionError::new(
+                            "reversed ordered lists are unsupported",
+                        ));
+                    }
+                    let mut items = Vec::new();
+                    for li in child.children() {
+                        match li.value() {
+                            Node::Text(text) if text.trim().is_empty() => {}
+                            Node::Comment(_) => {}
+                            Node::Element(item)
+                                if item.name() == "li" && item.attr("value").is_none() =>
+                            {
+                                let item_ref = scraper::ElementRef::wrap(li).unwrap();
+                                let significant = item_ref.children().filter(|node| !matches!(node.value(), Node::Comment(_)) && !matches!(node.value(), Node::Text(t) if t.trim().is_empty())).collect::<Vec<_>>();
+                                let content = if significant.len() == 1
+                                    && matches!(significant[0].value(), Node::Element(el) if el.name() == "p")
+                                {
+                                    parse_inlines(
+                                        scraper::ElementRef::wrap(significant[0]).unwrap(),
+                                    )?
+                                } else {
+                                    parse_inlines(item_ref)?
+                                };
+                                items.push(content);
+                            }
+                            _ => return Err(ConversionError::new("unsupported HTML list content")),
+                        }
+                    }
+                    if items.is_empty() {
+                        return Err(ConversionError::new("empty lists are unsupported"));
+                    }
+                    blocks.push(Block::List { ordered, items });
+                }
                 Node::Element(element)
                     if element.name() == "p"
                         || matches!(element.name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") =>
                 {
-                    let mut content = Vec::new();
-                    for node in child.children() {
-                        match node.value() {
-                            Node::Text(value) => inline::text(&mut content, &normalized(value)),
-                            Node::Comment(_) => {}
-                            Node::Element(anchor) if anchor.name() == "a" => {
-                                let href = anchor
-                                    .attr("href")
-                                    .ok_or_else(|| ConversionError::new("link has no href"))?;
-                                let mut label = String::new();
-                                for item in node.children() {
-                                    match item.value() {
-                                        Node::Text(value) => label.push_str(value),
-                                        Node::Comment(_) => {}
-                                        _ => {
-                                            return Err(ConversionError::new(
-                                                "unsupported link label",
-                                            ))
-                                        }
-                                    }
-                                }
-                                content.push(inline::from_href(href, normalized(&label))?);
-                            }
-                            _ => {
-                                return Err(ConversionError::new(
-                                    "unsupported HTML content inside block",
-                                ))
-                            }
-                        }
-                    }
-                    if let Some(Inline::Text(first)) = content.first_mut() {
-                        *first = first.trim_start_matches(' ').to_string();
-                    }
-                    if let Some(Inline::Text(last)) = content.last_mut() {
-                        *last = last.trim_end_matches(' ').to_string();
-                    }
+                    let content = parse_inlines(scraper::ElementRef::wrap(child).unwrap())?;
                     if element.name() == "p" {
                         if inline::plain(&content).is_empty() {
                             return Err(ConversionError::new(

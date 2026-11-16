@@ -130,7 +130,7 @@ fn document_structure(input: &str) -> String {
                 )
             })
             .unwrap_or_default();
-        let content = children(element, true);
+        let content = children(element, !matches!(name, "ul" | "ol"));
         format!("<{name}{href}>{content}</{name}>")
     }
 
@@ -251,6 +251,29 @@ fn external_link_targets_preserve_literal_entity_spelling() {
 }
 
 #[test]
+fn api_and_cli_preserve_list_type_item_order_and_paragraph_boundaries() {
+    let wiki = "Before.\n* Apple\n* Pear\n# First\n# Second\nAfter.";
+    let gfm = "Before.\n\n- Apple\n- Pear\n\n1. First\n2. Second\n\nAfter.";
+    let html = "<p>Before.</p><ul><li>Apple</li><li>Pear</li></ul><ol><li>First</li><li>Second</li></ol><p>After.</p>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
+fn adjacent_lists_of_the_same_type_stay_separate() {
+    let wiki = "* One\n\n* Two\n# Three\n\n# Four";
+    let gfm = "- One\n\n* Two\n\n1. Three\n\n1) Four";
+    let html =
+        "<ul><li>One</li></ul><ul><li>Two</li></ul><ol><li>Three</li></ol><ol><li>Four</li></ol>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
 fn cli_reads_files_and_writes_only_content_to_stdout() {
     let output = cli_command(Format::Wikitext, Format::Html)
         .arg(concat!(
@@ -343,6 +366,9 @@ fn pinned_parser_cases() {
             "vendor/wikimedia/parsoid/tests/parser/extLinks.txt",
             "External links: non-bracketed",
         ),
+        ("tests/parser/parserTests.txt", "Simple list"),
+        ("tests/parser/parserTests.txt", "Common list"),
+        ("tests/parser/parserTests.txt", "Numbered list"),
     ];
     for (path, title) in cases {
         let source = fs::read_to_string(release.join(path)).expect("read pinned parser cases");
