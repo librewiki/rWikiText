@@ -14,6 +14,7 @@ Delegate tasks that can proceed concurrently to subagents. Use the model and rea
 | --- | --- | --- |
 | ChatGPT (Codex) | GPT-6.1 Sol (High) | GPT-6.1 Terra (High) |
 | Antigravity | Gemini 4 Argon (High) | Gemini 4 Hydrogen (High) |
+| Claude Code | Sonnet 5.5 (High) | Sonnet 5.5 (High) |
 
 ## Agent skills
 
