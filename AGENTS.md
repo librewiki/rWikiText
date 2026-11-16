@@ -6,6 +6,15 @@ rWikiText is a Rust parser for MediaWiki wikitext.
 
 Before starting work, read and follow the [work lifecycle](docs/agents/issue-tracker.md#work-lifecycle) for branches, the `wip` label, commits, and pull requests.
 
+## Parallel work
+
+Delegate tasks that can proceed concurrently to subagents. Use the model and reasoning effort assigned to each role in the main agent's environment.
+
+| Main agent | Documentation, design, task instructions, test authoring, and verification | Code writing and test execution |
+| --- | --- | --- |
+| ChatGPT (Codex) | GPT-6.1 Sol (High) | GPT-6.1 Terra (High) |
+| Antigravity | Gemini 4 Argon (High) | Gemini 4 Hydrogen (High) |
+
 ## Agent skills
 
 ### Issue tracker
