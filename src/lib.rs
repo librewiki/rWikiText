@@ -4,7 +4,6 @@ use inline::Inline;
 use std::fmt;
 use std::str::FromStr;
 
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use scraper::{Html, Node};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +99,17 @@ enum Block {
     },
 }
 
+fn heading_id(text: &[Inline], ids: &mut std::collections::HashSet<String>) -> String {
+    let base = inline::normalize_fragment(&inline::plain(text));
+    let mut id = base.clone();
+    let mut suffix = 2;
+    while !ids.insert(id.to_lowercase()) {
+        id = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+    id
+}
+
 pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, ConversionError> {
     if !matches!(
         (request.source, request.target),
@@ -153,14 +163,7 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
                     format!("<p>{}</p>", render_inline(text, Format::Html))
                 }
                 (Format::Html, Block::Heading { level, text }) => {
-                    let plain = inline::plain(text);
-                    let base = plain.split_whitespace().collect::<Vec<_>>().join("_");
-                    let mut id = base.clone();
-                    let mut suffix = 2;
-                    while !ids.insert(id.to_lowercase()) {
-                        id = format!("{base}_{suffix}");
-                        suffix += 1;
-                    }
+                    let id = heading_id(text, &mut ids);
                     format!(
                         "<h{level} id=\"{}\">{}</h{level}>",
                         html_escape::encode_double_quoted_attribute(&id),
@@ -299,120 +302,33 @@ fn parse_wikitext(input: &str, language: &str) -> Result<Document, ConversionErr
     Ok(Document { blocks })
 }
 
-fn block_inlines(block: &mut Block) -> &mut Vec<Inline> {
-    match block {
-        Block::Paragraph(text) | Block::Heading { text, .. } => text,
-        Block::List { .. } => unreachable!("list items have their own inline content"),
-    }
-}
-
 fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
-    let mut blocks = Vec::new();
-    let mut current: Option<Block> = None;
-    let mut link: Option<(String, String)> = None;
-    let mut list: Option<(bool, Vec<Vec<Inline>>)> = None;
-    let mut item: Option<Vec<Inline>> = None;
-    let mut item_paragraph = false;
-    let mut item_had_paragraph = false;
-    let options = Options::ENABLE_GFM
-        | Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
-    for event in Parser::new_ext(input, options) {
-        match event {
-            Event::Start(Tag::List(start))
-                if current.is_none() && list.is_none() && item.is_none() =>
-            {
-                if start.is_some_and(|value| value != 1) {
-                    return Err(ConversionError::new("ordered lists must start at 1"));
-                }
-                list = Some((start.is_some(), Vec::new()));
+    // Comrak implements GFM literal autolinks. Reject raw HTML and link titles
+    // before rendering so sanitization cannot silently discard source content.
+    let mut options = comrak::Options::default();
+    options.extension.autolink = true;
+    options.extension.table = true;
+    options.extension.strikethrough = true;
+    options.extension.tasklist = true;
+    let arena = comrak::Arena::new();
+    let root = comrak::parse_document(&arena, input, &options);
+    for node in root.descendants() {
+        match &node.data.borrow().value {
+            comrak::nodes::NodeValue::HtmlBlock(_) | comrak::nodes::NodeValue::HtmlInline(_) => {
+                return Err(ConversionError::new("raw GFM HTML is unsupported"));
             }
-            Event::End(TagEnd::List(_)) if list.is_some() && item.is_none() => {
-                let (ordered, items) = list.take().unwrap();
-                if items.is_empty() {
-                    return Err(ConversionError::new("empty lists are unsupported"));
-                }
-                blocks.push(Block::List { ordered, items });
+            comrak::nodes::NodeValue::Link(link) if !link.title.is_empty() => {
+                return Err(ConversionError::new("GFM link titles are unsupported"));
             }
-            Event::Start(Tag::Item) if list.is_some() && item.is_none() => {
-                item = Some(Vec::new());
-                item_had_paragraph = false;
-            }
-            Event::End(TagEnd::Item) if item.is_some() && !item_paragraph && link.is_none() => {
-                list.as_mut().unwrap().1.push(item.take().unwrap())
-            }
-            Event::Start(Tag::Paragraph)
-                if item.is_some()
-                    && !item_paragraph
-                    && !item_had_paragraph
-                    && item.as_ref().unwrap().is_empty() =>
-            {
-                item_paragraph = true;
-                item_had_paragraph = true;
-            }
-            Event::End(TagEnd::Paragraph) if item_paragraph && link.is_none() => {
-                item_paragraph = false
-            }
-            Event::Start(Tag::Paragraph) if current.is_none() && list.is_none() => {
-                current = Some(Block::Paragraph(Vec::new()))
-            }
-            Event::Start(Tag::Heading { level, .. }) if current.is_none() && list.is_none() => {
-                current = Some(Block::Heading {
-                    level: level as u8,
-                    text: Vec::new(),
-                })
-            }
-            Event::End(TagEnd::Paragraph)
-                if matches!(current, Some(Block::Paragraph(_))) && link.is_none() =>
-            {
-                blocks.push(current.take().unwrap())
-            }
-            Event::End(TagEnd::Heading(_))
-                if matches!(current, Some(Block::Heading { .. })) && link.is_none() =>
-            {
-                blocks.push(current.take().unwrap())
-            }
-            Event::Start(Tag::Link {
-                dest_url, title, ..
-            }) if (current.is_some() || item.is_some()) && link.is_none() && title.is_empty() => {
-                link = Some((dest_url.into_string(), String::new()))
-            }
-            Event::End(TagEnd::Link) if link.is_some() => {
-                let (href, label) = link.take().unwrap();
-                let target = if let Some(item) = &mut item {
-                    item
-                } else {
-                    block_inlines(current.as_mut().unwrap())
-                };
-                target.push(inline::from_href(&href, label)?);
-            }
-            Event::Text(value) => {
-                if let Some((_, label)) = &mut link {
-                    label.push_str(&value);
-                } else if let Some(item) = &mut item {
-                    if item_had_paragraph && !item_paragraph {
-                        return Err(ConversionError::new(
-                            "multiple list item blocks are unsupported",
-                        ));
-                    }
-                    inline::text(item, &value);
-                } else if let Some(block) = &mut current {
-                    inline::text(block_inlines(block), &value);
-                } else {
-                    return Err(ConversionError::new("unsupported GFM text"));
-                }
-            }
-            Event::SoftBreak if link.is_none() && item.is_some() => {
-                inline::text(item.as_mut().unwrap(), " ")
-            }
-            Event::SoftBreak if link.is_none() && current.is_some() => {
-                inline::text(block_inlines(current.as_mut().unwrap()), "\n")
-            }
-            _ => return Err(ConversionError::new("unsupported GFM syntax")),
+            _ => {}
         }
     }
-    Ok(Document { blocks })
+    let mut output = Vec::new();
+    comrak::format_html(root, &options, &mut output)
+        .map_err(|error| ConversionError::new(format!("failed to render GFM: {error}")))?;
+    let html = String::from_utf8(output)
+        .map_err(|_| ConversionError::new("GFM renderer produced invalid UTF-8"))?;
+    parse_html(&html)
 }
 
 fn parse_html(input: &str) -> Result<Document, ConversionError> {
@@ -548,15 +464,60 @@ fn parse_html(input: &str) -> Result<Document, ConversionError> {
     let fragment = Html::parse_fragment(input);
     let mut blocks = Vec::new();
     children(fragment.root_element(), &mut blocks)?;
+    // Wikitext cannot express arbitrary HTML heading IDs. Fail when a same-page
+    // link depends on an ID that would change during conversion.
+    let headings = scraper::Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
+    let anchors = scraper::Selector::parse("a[href]").unwrap();
+    let mut ids = std::collections::HashSet::new();
+    let canonical = blocks.iter().filter_map(|block| match block {
+        Block::Heading { text, .. } => Some(heading_id(text, &mut ids)),
+        _ => None,
+    });
+    let changed: std::collections::HashSet<String> = fragment
+        .select(&headings)
+        .zip(canonical)
+        .filter_map(|(element, canonical)| {
+            element
+                .value()
+                .attr("id")
+                .filter(|id| *id != canonical)
+                .map(str::to_owned)
+        })
+        .collect();
+    for anchor in fragment.select(&anchors) {
+        if let Some(raw) = anchor
+            .value()
+            .attr("href")
+            .and_then(|href| href.strip_prefix('#'))
+        {
+            if changed.contains(&inline::decode_component(raw)?) {
+                return Err(ConversionError::new("same-page link refers to a noncanonical HTML heading ID that wikitext cannot preserve"));
+            }
+        }
+    }
     Ok(Document { blocks })
 }
 
 fn render_inline(content: &[Inline], format: Format) -> String {
     let mut output = String::new();
+    let mut previous_wikilink = false;
     for part in content {
         match part {
             Inline::Text(text) => match format {
-                Format::Wikitext => output.push_str(&escape_wikitext(text)),
+                Format::Wikitext => {
+                    let mut remainder = text.as_str();
+                    if previous_wikilink {
+                        if let Some(first) = remainder.chars().next().filter(|c| c.is_alphabetic())
+                        {
+                            output.push_str(&format!("&#{};", first as u32));
+                            remainder = &remainder[first.len_utf8()..];
+                        }
+                    }
+                    output.push_str(&escape_wikitext_at(
+                        remainder,
+                        output.is_empty() || output.ends_with('\n'),
+                    ));
+                }
                 Format::Gfm => output.push_str(&escape_gfm(text)),
                 Format::Html => output.push_str(&html_escape::encode_text(text)),
             },
@@ -595,13 +556,21 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                 )),
             },
         }
+        match part {
+            Inline::Link { internal, .. } => previous_wikilink = *internal,
+            Inline::Text(text) if !text.is_empty() => previous_wikilink = false,
+            _ => {}
+        }
     }
     output
 }
 
 fn escape_wikitext(text: &str) -> String {
+    escape_wikitext_at(text, true)
+}
+
+fn escape_wikitext_at(text: &str, mut line_start: bool) -> String {
     let mut output = String::new();
-    let mut line_start = true;
     for ch in text.chars() {
         match ch {
             ' ' | '\t' if line_start => output.push_str(&format!("&#{};", ch as u32)),

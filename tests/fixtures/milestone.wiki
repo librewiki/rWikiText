@@ -1,0 +1,11 @@
+== Getting started ==
+Read [[Main Page|guide]]&#115; to start.
+
+* Check [[Junk Page|the examples]].
+* Open [https://example.org/ the guide].
+
+=== Steps ===
+# First step
+# Second step
+
+Review the guide at https://example.net.

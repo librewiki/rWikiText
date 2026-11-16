@@ -48,19 +48,25 @@ fn cli_command(source: Format, target: Format) -> Command {
 }
 
 fn cli_output(source: Format, target: Format, input: &str) -> Output {
-    let mut child = cli_command(source, target)
+    output_with_stdin(&mut cli_command(source, target), input)
+}
+
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start CLI");
+        .expect("start converter process");
     child
         .stdin
         .take()
         .expect("open stdin")
         .write_all(input.as_bytes())
         .expect("write stdin");
-    child.wait_with_output().expect("wait for CLI")
+    child
+        .wait_with_output()
+        .expect("wait for converter process")
 }
 
 fn stdout(output: Output) -> String {
@@ -80,28 +86,34 @@ fn render_gfm(input: &str) -> String {
 }
 
 fn document_structure(input: &str) -> String {
+    fn append_text(output: &mut String, text: &str) {
+        for character in html_escape::encode_text(text).chars() {
+            if character.is_ascii_whitespace() {
+                if !output.ends_with(' ') {
+                    output.push(' ');
+                }
+            } else {
+                output.push(character);
+            }
+        }
+    }
+
     fn children(parent: ElementRef<'_>, inline: bool) -> String {
         let mut output = String::new();
         for child in parent.children() {
             match child.value() {
-                Node::Text(text) => {
-                    if !inline && text.trim_ascii().is_empty() {
-                        continue;
-                    }
-                    for character in html_escape::encode_text::<str>(text).chars() {
-                        if character.is_ascii_whitespace() {
-                            if !output.ends_with(' ') {
-                                output.push(' ');
-                            }
-                        } else {
-                            output.push(character);
-                        }
+                Node::Text(text) if inline || !text.trim_ascii().is_empty() => {
+                    append_text(&mut output, text);
+                }
+                Node::Element(node) => {
+                    let element = ElementRef::wrap(child).unwrap();
+                    if node.name() == "span" && node.attr("typeof") == Some("mw:Entity") {
+                        append_text(&mut output, &element.text().collect::<String>());
+                    } else {
+                        output.push_str(&normalize_element(element));
                     }
                 }
-                Node::Element(_) => {
-                    output.push_str(&normalize_element(ElementRef::wrap(child).unwrap()))
-                }
-                Node::Comment(_) => {}
+                Node::Text(_) | Node::Comment(_) => {}
                 other => panic!("unexpected DOM node {other:?}"),
             }
         }
@@ -143,13 +155,26 @@ fn assert_document_conversions(
     gfm: &str,
     html: &str,
 ) {
+    assert_conversions_with_renderer(convert, wikitext, gfm, html, |source| {
+        convert(Format::Wikitext, Format::Html, source)
+    });
+}
+
+fn assert_conversions_with_renderer(
+    convert: fn(Format, Format, &str) -> String,
+    wikitext: &str,
+    gfm: &str,
+    html: &str,
+    render: impl Fn(&str) -> String,
+) {
     use Format::{Gfm, Html, Wikitext};
 
     let expected = document_structure(html);
-    let render_wikitext = |wikitext: &str| document_structure(&convert(Wikitext, Html, wikitext));
+    let render_wikitext = |wikitext: &str| document_structure(&render(wikitext));
 
     let markdown = convert(Wikitext, Gfm, wikitext);
     let exported_html = convert(Wikitext, Html, wikitext);
+    assert_eq!(render_wikitext(wikitext), expected);
     assert_eq!(document_structure(&render_gfm(&markdown)), expected);
     assert_eq!(document_structure(&exported_html), expected);
     assert_eq!(render_wikitext(&convert(Gfm, Wikitext, gfm)), expected);
@@ -215,7 +240,7 @@ fn asymmetric_wikitext_heading_keeps_extra_equals_in_the_label() {
 #[test]
 fn api_and_cli_preserve_basic_link_labels_destinations_and_prose() {
     let wiki = "See [[Main Page]] and [[other page|the guide]], then [https://example.org/find?q=rust&lang=en search].\n\nVisit https://example.net.";
-    let gfm = "See [Main Page](./Main_Page) and [the guide](./Other_page), then [search](https://example.org/find?q=rust&lang=en).\n\nVisit <https://example.net>.";
+    let gfm = "See [Main Page](./Main_Page) and [the guide](./Other_page), then [search](https://example.org/find?q=rust&lang=en).\n\nVisit https://example.net.";
     let html = "<p>See <a href=\"./Main_Page\">Main Page</a> and <a href=\"./Other_page\">the guide</a>, then <a href=\"https://example.org/find?q=rust&amp;lang=en\">search</a>.</p><p>Visit <a href=\"https://example.net\">https://example.net</a>.</p>";
 
     for convert in [api, cli] {
@@ -235,6 +260,38 @@ fn api_and_cli_preserve_same_page_link_fragments() {
 }
 
 #[test]
+fn same_page_link_resolves_to_a_heading_with_repeated_underscores() {
+    for convert in [api, cli] {
+        let html = convert(
+            Format::Wikitext,
+            Format::Html,
+            "== A__B ==\n\nJump to [[#A__B|the heading]].",
+        );
+        let document = Html::parse_fragment(&html);
+        let heading = scraper::Selector::parse("h2[id='A_B']").unwrap();
+        let link = scraper::Selector::parse("a[href='#A_B']").unwrap();
+        assert_eq!(document.select(&heading).count(), 1);
+        assert_eq!(document.select(&link).count(), 1);
+    }
+}
+
+#[test]
+fn html_import_reports_a_same_page_link_to_an_unrepresentable_heading_id() {
+    let input = "<h2 id=\"legacy\">Heading</h2><p><a href=\"#legacy\">Jump</a></p>";
+    let result = convert(ConversionRequest {
+        source: Format::Html,
+        target: Format::Wikitext,
+        input,
+        context: &CONTEXT,
+    });
+    assert!(result.unwrap_err().to_string().contains("heading ID"));
+    let output = cli_output(Format::Html, Format::Wikitext, input);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("heading ID"));
+}
+
+#[test]
 fn external_link_targets_preserve_literal_entity_spelling() {
     let html = "<p><a href=\"https://example.org/?value=&amp;amp;\">Example</a></p>";
     let expected = document_structure(html);
@@ -247,6 +304,28 @@ fn external_link_targets_preserve_literal_entity_spelling() {
             document_structure(&convert(Format::Wikitext, Format::Html, &recovered)),
             expected
         );
+    }
+}
+
+#[test]
+fn basic_links_keep_source_labels_and_normalize_wiki_namespace_targets() {
+    let wiki = "See [[Main_Page]], [[Talk:main page|discussion]], [[Main Page|A &lt; B]], and [https://example.org/ A &#91;B&#93;].";
+    let gfm = "See [Main_Page](./Main_Page), [discussion](./Talk:Main_page), [A &lt; B](./Main_Page), and [A \\[B\\]](https://example.org/).";
+    let html = "<p>See <a href=\"./Main_Page\">Main_Page</a>, <a href=\"./Talk:Main_page\">discussion</a>, <a href=\"./Main_Page\">A &lt; B</a>, and <a href=\"https://example.org/\">A [B]</a>.</p>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
+fn wikitext_plain_words_do_not_gain_links_or_swallow_markup_around_entities() {
+    let wiki = "abchttps://example.org/ & [[Main Page]] &amp; text.";
+    let html =
+        "<p>abchttps://example.org/ &amp; <a href=\"./Main_Page\">Main Page</a> &amp; text.</p>";
+    for convert in [api, cli] {
+        let actual = convert(Format::Wikitext, Format::Html, wiki);
+        assert_eq!(document_structure(&actual), document_structure(html));
     }
 }
 
@@ -270,6 +349,74 @@ fn adjacent_lists_of_the_same_type_stay_separate() {
 
     for convert in [api, cli] {
         assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+const MILESTONE_WIKI: &str = include_str!("fixtures/milestone.wiki");
+const MILESTONE_GFM: &str = include_str!("fixtures/milestone.md");
+const MILESTONE_HTML: &str = include_str!("fixtures/milestone.html");
+
+#[test]
+fn api_and_cli_convert_complete_basic_documents() {
+    for convert in [api, cli] {
+        assert_document_conversions(convert, MILESTONE_WIKI, MILESTONE_GFM, MILESTONE_HTML);
+    }
+}
+
+#[test]
+fn complete_document_cli_file_stdin_and_output_streams() {
+    use Format::{Gfm, Html, Wikitext};
+
+    let fixtures = [
+        (Wikitext, Gfm, "milestone.wiki", MILESTONE_WIKI),
+        (Wikitext, Html, "milestone.wiki", MILESTONE_WIKI),
+        (Gfm, Wikitext, "milestone.md", MILESTONE_GFM),
+        (Html, Wikitext, "milestone.html", MILESTONE_HTML),
+    ];
+    for (source, target, name, content) in fixtures {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        let file = cli_command(source, target)
+            .arg(path)
+            .stdin(Stdio::null())
+            .output()
+            .expect("read complete document from disk");
+        let stdin = output_with_stdin(cli_command(source, target).arg("-"), content);
+        assert_eq!(stdout(file), stdout(stdin));
+    }
+
+    let output = cli_output(Wikitext, Html, "{{Unsupported template}}");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported wikitext syntax"));
+}
+
+#[test]
+#[ignore = "requires the pinned MediaWiki release and PHP; see docs/compatibility.md"]
+fn parsoid_confirms_complete_document_round_trips() {
+    let render = |wikitext: &str| {
+        let php = std::env::var_os("RWIKITEXT_PHP").unwrap_or_else(|| "php".into());
+        let mut command = Command::new(php);
+        command
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/render-parsoid.php"))
+            .arg(mediawiki_release())
+            .args([
+                CONTEXT.page_title,
+                CONTEXT.site_language,
+                CONTEXT.reference_time,
+            ]);
+        stdout(output_with_stdin(&mut command, wikitext))
+    };
+
+    for convert in [api, cli] {
+        assert_conversions_with_renderer(
+            convert,
+            MILESTONE_WIKI,
+            MILESTONE_GFM,
+            MILESTONE_HTML,
+            render,
+        );
     }
 }
 
@@ -342,7 +489,7 @@ fn parser_case(source: &str, title: &str) -> (String, String) {
 #[test]
 #[ignore = "requires the pinned MediaWiki source archive; see docs/compatibility.md"]
 fn pinned_parser_cases() {
-    let release = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/upstream/mediawiki-1.46.2");
+    let release = mediawiki_release();
     let cases = [
         ("tests/parser/parserTests.txt", "Blank input"),
         ("tests/parser/parserTests.txt", "Simple paragraph"),
@@ -366,6 +513,10 @@ fn pinned_parser_cases() {
             "vendor/wikimedia/parsoid/tests/parser/extLinks.txt",
             "External links: non-bracketed",
         ),
+        (
+            "vendor/wikimedia/parsoid/tests/parser/extLinks.txt",
+            "External links: Free with trailing punctuation",
+        ),
         ("tests/parser/parserTests.txt", "Simple list"),
         ("tests/parser/parserTests.txt", "Common list"),
         ("tests/parser/parserTests.txt", "Numbered list"),
@@ -380,4 +531,8 @@ fn pinned_parser_cases() {
         );
         println!("{path}: {title}");
     }
+}
+
+fn mediawiki_release() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("target/upstream/mediawiki-1.46.2")
 }
