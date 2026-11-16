@@ -1,6 +1,6 @@
 # rWikiText
 
-rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs separated by a single blank line in wikitext.
+rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs and headings at levels one through six.
 
 ```sh
 cargo run -- wikitext html input.wiki
