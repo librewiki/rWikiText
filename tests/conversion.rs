@@ -5,7 +5,7 @@ use std::process::{Command, Output, Stdio};
 
 use pulldown_cmark::{html, Options, Parser};
 use rwikitext::{convert, ConversionRequest, Format, WikiContext};
-use scraper::{ElementRef, Html};
+use scraper::{ElementRef, Html, Node};
 
 const CONTEXT: WikiContext<'static> = WikiContext {
     page_title: "Parser test",
@@ -79,31 +79,62 @@ fn render_gfm(input: &str) -> String {
     html
 }
 
-fn document_structure(input: &str) -> Vec<(String, String)> {
-    fn blocks(parent: ElementRef<'_>, output: &mut Vec<(String, String)>) {
-        for mut element in parent.child_elements() {
-            if element.value().name() == "section" {
-                blocks(element, output);
-                continue;
+fn document_structure(input: &str) -> String {
+    fn children(parent: ElementRef<'_>, inline: bool) -> String {
+        let mut output = String::new();
+        for child in parent.children() {
+            match child.value() {
+                Node::Text(text) => {
+                    if !inline && text.trim_ascii().is_empty() {
+                        continue;
+                    }
+                    for character in html_escape::encode_text::<str>(text).chars() {
+                        if character.is_ascii_whitespace() {
+                            if !output.ends_with(' ') {
+                                output.push(' ');
+                            }
+                        } else {
+                            output.push(character);
+                        }
+                    }
+                }
+                Node::Element(_) => {
+                    output.push_str(&normalize_element(ElementRef::wrap(child).unwrap()))
+                }
+                Node::Comment(_) => {}
+                other => panic!("unexpected DOM node {other:?}"),
             }
-            if element.value().classes().any(|class| class == "mw-heading") {
-                element = element
-                    .child_elements()
-                    .next()
-                    .expect("heading in MediaWiki wrapper");
-            }
-            assert_eq!(element.child_elements().count(), 0);
-            let text = element.text().collect::<String>();
-            output.push((
-                element.value().name().into(),
-                text.split_ascii_whitespace().collect::<Vec<_>>().join(" "),
-            ));
         }
+        output.trim_ascii().into()
     }
 
-    let mut output = Vec::new();
-    blocks(Html::parse_fragment(input).root_element(), &mut output);
-    output
+    fn normalize_element(element: ElementRef<'_>) -> String {
+        let name = element.value().name();
+        if element.value().classes().any(|class| class == "mw-heading") {
+            return normalize_element(
+                element
+                    .child_elements()
+                    .next()
+                    .expect("heading in MediaWiki wrapper"),
+            );
+        }
+        if name == "section" {
+            return children(element, false);
+        }
+        let href = element
+            .attr("href")
+            .map(|href| {
+                format!(
+                    " href=\"{}\"",
+                    html_escape::encode_double_quoted_attribute(href)
+                )
+            })
+            .unwrap_or_default();
+        let content = children(element, true);
+        format!("<{name}{href}>{content}</{name}>")
+    }
+
+    children(Html::parse_fragment(input).root_element(), false)
 }
 
 fn assert_document_conversions(
@@ -178,6 +209,44 @@ fn asymmetric_wikitext_heading_keeps_extra_equals_in_the_label() {
     for convert in [api, cli] {
         let output = convert(Format::Wikitext, Format::Html, "=== Heading ==");
         assert_eq!(document_structure(&output), expected);
+    }
+}
+
+#[test]
+fn api_and_cli_preserve_basic_link_labels_destinations_and_prose() {
+    let wiki = "See [[Main Page]] and [[other page|the guide]], then [https://example.org/find?q=rust&lang=en search].\n\nVisit https://example.net.";
+    let gfm = "See [Main Page](./Main_Page) and [the guide](./Other_page), then [search](https://example.org/find?q=rust&lang=en).\n\nVisit <https://example.net>.";
+    let html = "<p>See <a href=\"./Main_Page\">Main Page</a> and <a href=\"./Other_page\">the guide</a>, then <a href=\"https://example.org/find?q=rust&amp;lang=en\">search</a>.</p><p>Visit <a href=\"https://example.net\">https://example.net</a>.</p>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
+fn api_and_cli_preserve_same_page_link_fragments() {
+    let wiki = "See [[#Local section|below]].\n\n== Local section ==";
+    let gfm = "See [below](#Local_section).\n\n## Local section";
+    let html = "<p>See <a href=\"#Local_section\">below</a>.</p><h2 id=\"Local_section\">Local section</h2>";
+
+    for convert in [api, cli] {
+        assert_document_conversions(convert, wiki, gfm, html);
+    }
+}
+
+#[test]
+fn external_link_targets_preserve_literal_entity_spelling() {
+    let html = "<p><a href=\"https://example.org/?value=&amp;amp;\">Example</a></p>";
+    let expected = document_structure(html);
+    for convert in [api, cli] {
+        let wiki = convert(Format::Html, Format::Wikitext, html);
+        let gfm = convert(Format::Wikitext, Format::Gfm, &wiki);
+        assert_eq!(document_structure(&render_gfm(&gfm)), expected);
+        let recovered = convert(Format::Gfm, Format::Wikitext, &gfm);
+        assert_eq!(
+            document_structure(&convert(Format::Wikitext, Format::Html, &recovered)),
+            expected
+        );
     }
 }
 
@@ -261,6 +330,18 @@ fn pinned_parser_cases() {
         (
             "vendor/wikimedia/parsoid/tests/parser/headings.txt",
             "Basic section headings",
+        ),
+        (
+            "tests/parser/parserTests.txt",
+            "Multiple spaces in titles should normalize to a single underscore",
+        ),
+        (
+            "vendor/wikimedia/parsoid/tests/parser/extLinks.txt",
+            "External links: specified text",
+        ),
+        (
+            "vendor/wikimedia/parsoid/tests/parser/extLinks.txt",
+            "External links: non-bracketed",
         ),
     ];
     for (path, title) in cases {
