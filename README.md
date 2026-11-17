@@ -54,9 +54,11 @@ Build the versioned C ABI and run the C, Python, PHP, Java, Kotlin/Native, and N
 | `glibc` | `x86-64`, `ARM64` | C, Python, PHP, Java, Kotlin/Native, Node.js |
 | `musl` | `x86-64`, `ARM64` | C, Python, PHP, Java, Node.js |
 
+A Go binding using the versioned C ABI is planned.
+
 ## Current Status
 
-rWikiText provides a Rust conversion core, test CLI, versioned C ABI, and native language bindings with caller-supplied wiki data callbacks. All core document conversions, MediaWiki core syntax, and native bindings are implemented and verified against MediaWiki 1.46.2 and Parsoid HTML 2.8.0. The first public release is tracking Linux runtime matrix verification.
+rWikiText provides a Rust conversion core, test CLI, versioned C ABI, and native language bindings with caller-supplied wiki data callbacks. Core document conversions, MediaWiki core syntax, and the bindings in the table above are implemented and verified against MediaWiki 1.46.2 and Parsoid HTML 2.8.0. The first public release is tracking Linux runtime matrix verification.
 
 ### Completed
 
