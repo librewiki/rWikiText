@@ -210,10 +210,12 @@ impl Engine<'_, '_> {
     fn top(&mut self, input: &str, out: &mut Expansion) -> Result<(), ConversionError> {
         let no_params = Rc::new(Params::new());
         let mut pos = 0;
+        let mut lexical = LexicalContext::default();
         while pos < input.len() {
             let tail = &input[pos..];
             if let Some(n) = literal_len(tail) {
                 self.append(out, &tail[..n], pos..pos + n, true)?;
+                lexical.bracket = None;
                 pos += n;
                 continue;
             }
@@ -242,10 +244,14 @@ impl Engine<'_, '_> {
             if tail.starts_with("{{") {
                 if let Some(n) = construct_end(tail) {
                     let source = pos..pos + n;
-                    let start = out.text.len();
                     let (value, call) =
                         self.construct(&tail[..n], &no_params, 0, source.clone())?;
+                    if needs_implicit_newline(&out.text, &value) && lexical.allows_block() {
+                        self.append(out, "\n", source.clone(), false)?;
+                    }
+                    let start = out.text.len();
                     self.append(out, &value, source.clone(), false)?;
+                    lexical.advance(&value);
                     if let Some((target, title, arguments, function)) = call {
                         out.invocations.push(Invocation {
                             expanded_range: start..out.text.len(),
@@ -264,6 +270,7 @@ impl Engine<'_, '_> {
             }
             let n = tail.chars().next().unwrap().len_utf8();
             self.append(out, &tail[..n], pos..pos + n, true)?;
+            lexical.advance(&tail[..n]);
             pos += n;
         }
         Ok(())
@@ -278,9 +285,10 @@ impl Engine<'_, '_> {
         let mut out = String::new();
         let mut output_size = 0usize;
         let mut pos = 0;
+        let mut lexical = LexicalContext::default();
         while pos < input.len() {
             let tail = &input[pos..];
-            let (part, n) = if let Some(n) = literal_len(tail) {
+            let (mut part, n) = if let Some(n) = literal_len(tail) {
                 (tail[..n].to_owned(), n)
             } else if tail.starts_with("{{") {
                 if let Some(n) = construct_end(tail) {
@@ -295,6 +303,12 @@ impl Engine<'_, '_> {
                 let n = tail.chars().next().unwrap().len_utf8();
                 (tail[..n].to_owned(), n)
             };
+            if tail.starts_with("{{")
+                && needs_implicit_newline(&out, &part)
+                && lexical.allows_block()
+            {
+                part.insert(0, '\n');
+            }
             let size = self.visible_len(&part);
             if output_size.saturating_add(size) > self.limits.max_output_bytes {
                 return Err(ConversionError::expansion_limit(
@@ -304,6 +318,11 @@ impl Engine<'_, '_> {
             }
             output_size += size;
             out.push_str(&part);
+            if literal_len(tail).is_none() {
+                lexical.advance(&part);
+            } else {
+                lexical.bracket = None;
+            }
             pos += n;
         }
         Ok(out)
@@ -382,7 +401,7 @@ impl Engine<'_, '_> {
             ));
         }
         let head = split_top(parts[0], ':');
-        let func = self.text(head[0], params, depth + 1, source.clone())?;
+        let func = strip_comments(&self.text(head[0], params, depth + 1, source.clone())?);
         let arg = (head.len() > 1).then(|| head[1..].join(":"));
         if func.trim().eq_ignore_ascii_case("DISPLAYTITLE") {
             if let Some(a) = arg.as_deref() {
@@ -397,6 +416,8 @@ impl Engine<'_, '_> {
         args.extend_from_slice(&parts[1..]);
         let data = self.data.unwrap_or(&EMPTY_DATA);
         let context = self.context;
+        let max_output_bytes = self.limits.max_output_bytes;
+        let literal_tag = func.trim().eq_ignore_ascii_case("#tag");
         if let Some(value) = crate::functions::evaluate(
             func.trim(),
             &args,
@@ -404,7 +425,35 @@ impl Engine<'_, '_> {
             context,
             data,
             source.clone(),
-            |s| self.text(s, params, depth + 1, source.clone()),
+            max_output_bytes,
+            |s| {
+                let text = self.text(s, params, depth + 1, source.clone())?;
+                if !literal_tag {
+                    return Ok(text);
+                }
+                let markers: Vec<_> = self
+                    .link_markers(&text)
+                    .map(|(range, title)| (range, title.to_owned()))
+                    .collect();
+                if markers.is_empty() {
+                    return Ok(text);
+                }
+                self.diagnostics.push(Diagnostic::loss(
+                    source.clone(),
+                    "cannot preserve a missing-template link inside #tag literal content",
+                ));
+                let mut resolved = String::new();
+                let mut previous = 0;
+                for (range, title) in markers {
+                    resolved.push_str(&text[previous..range.start]);
+                    resolved.push_str("[[:");
+                    resolved.push_str(&title);
+                    resolved.push_str("]]");
+                    previous = range.end;
+                }
+                resolved.push_str(&text[previous..]);
+                Ok(resolved)
+            },
         )? {
             let arguments = parts[1..]
                 .iter()
@@ -426,17 +475,69 @@ impl Engine<'_, '_> {
                 )),
             ));
         }
+        if arg.is_some()
+            && func.trim().strip_prefix('#').is_some_and(|name| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        {
+            self.diagnostics.push(Diagnostic::loss(
+                source.clone(),
+                format!("unsupported parser function {}", func.trim()),
+            ));
+        }
         let name = if let Some(a) = arg {
-            format!(
-                "{}:{}",
-                func,
-                self.text(&a, params, depth + 1, source.clone())?
-            )
+            let suffix = self.text(&a, params, depth + 1, source.clone())?;
+            if self
+                .visible_len(&func)
+                .saturating_add(1)
+                .saturating_add(self.visible_len(&suffix))
+                > self.limits.max_output_bytes
+            {
+                return Err(ConversionError::expansion_limit(
+                    source,
+                    "template expansion output byte limit exceeded",
+                ));
+            }
+            format!("{func}:{suffix}")
         } else {
             func
         };
         let Some(title) = canonical_template_target(&name) else {
-            return Ok((input.to_owned(), None));
+            const OPEN: &str = "&#123;&#123;";
+            const CLOSE: &str = "&#125;&#125;";
+            let mut size = OPEN
+                .len()
+                .saturating_add(self.visible_len(&name))
+                .saturating_add(CLOSE.len());
+            if size > self.limits.max_output_bytes {
+                return Err(ConversionError::expansion_limit(
+                    source,
+                    "template expansion output byte limit exceeded",
+                ));
+            }
+            let mut body = String::from(OPEN);
+            body.push_str(&name);
+            for part in &parts[1..] {
+                size = size.saturating_add(1);
+                if size > self.limits.max_output_bytes {
+                    return Err(ConversionError::expansion_limit(
+                        source,
+                        "template expansion output byte limit exceeded",
+                    ));
+                }
+                let value = self.text(part, params, depth + 1, source.clone())?;
+                size = size.saturating_add(self.visible_len(&value));
+                if size > self.limits.max_output_bytes {
+                    return Err(ConversionError::expansion_limit(
+                        source,
+                        "template expansion output byte limit exceeded",
+                    ));
+                }
+                body.push('|');
+                body.push_str(&value);
+            }
+            body.push_str(CLOSE);
+            return Ok((body, None));
         };
         if self.data.is_none() {
             self.diagnostics.push(Diagnostic::loss(
@@ -481,7 +582,7 @@ impl Engine<'_, '_> {
                 named,
             });
         }
-        let mut requested = title.clone();
+        let mut requested = title.split('#').next().unwrap_or(&title).to_owned();
         let mut depth = depth;
         let body = loop {
             match data.template_text(&requested) {
@@ -539,12 +640,110 @@ impl Engine<'_, '_> {
     }
 }
 
+// MediaWiki's T2529 rule gives expansions beginning with list or table
+// syntax a line boundary, even when the invocation is mid-line.
+#[derive(Default)]
+struct LexicalContext {
+    links: usize,
+    bracket: Option<char>,
+    tag: bool,
+    tag_pending: bool,
+    quote: Option<char>,
+    external: bool,
+    external_probe: Option<String>,
+}
+
+impl LexicalContext {
+    fn allows_block(&self) -> bool {
+        self.links == 0 && !self.external && !self.tag && !self.tag_pending
+    }
+
+    fn advance(&mut self, mut text: &str) {
+        while !text.is_empty() {
+            if !self.tag {
+                if let Some(n) = literal_len(text) {
+                    self.bracket = None;
+                    text = &text[n..];
+                    continue;
+                }
+            }
+            let ch = text.chars().next().unwrap();
+            text = &text[ch.len_utf8()..];
+            if self.tag_pending {
+                self.tag_pending = false;
+                if ch.is_ascii_alphabetic() || matches!(ch, '/' | '!' | '?') {
+                    self.tag = true;
+                    continue;
+                }
+            }
+            if self.tag {
+                if let Some(quote) = self.quote {
+                    if ch == quote {
+                        self.quote = None;
+                    }
+                } else if matches!(ch, '\'' | '"') {
+                    self.quote = Some(ch);
+                } else if ch == '>' {
+                    self.tag = false;
+                }
+                continue;
+            }
+            if self.external {
+                if ch == '<' {
+                    self.tag_pending = true;
+                } else if ch == ']' {
+                    self.external = false;
+                }
+                continue;
+            }
+            if self.bracket == Some('[') && ch != '[' && self.links == 0 {
+                self.external_probe = Some(String::new());
+            }
+            if let Some(probe) = &mut self.external_probe {
+                probe.push(ch.to_ascii_lowercase());
+                if crate::html_policy::PROTOCOLS.contains(&probe.as_str()) {
+                    self.external = true;
+                    self.external_probe = None;
+                    self.bracket = None;
+                    continue;
+                }
+                if !crate::html_policy::PROTOCOLS
+                    .iter()
+                    .any(|protocol| protocol.starts_with(probe.as_str()))
+                {
+                    self.external_probe = None;
+                }
+            }
+            if ch == '<' {
+                self.tag_pending = true;
+                self.bracket = None;
+            } else if self.bracket == Some('[') && ch == '[' {
+                self.links += 1;
+                self.bracket = None;
+            } else if self.bracket == Some(']') && ch == ']' && self.links > 0 {
+                self.links -= 1;
+                self.bracket = None;
+            } else {
+                self.bracket = matches!(ch, '[' | ']').then_some(ch);
+            }
+        }
+    }
+}
+
+fn needs_implicit_newline(prefix: &str, expansion: &str) -> bool {
+    !prefix.is_empty()
+        && !prefix.ends_with('\n')
+        && (expansion.starts_with(['*', '#', ':', ';']) || expansion.starts_with("{|"))
+}
+
 pub(crate) fn canonical_template_target(name: &str) -> Option<String> {
+    let name = strip_comments(name);
+    let name = html_escape::decode_html_entities(&name);
     let name = name.trim();
     if name.is_empty()
         || name
             .chars()
-            .any(|c| c.is_control() || "[]{}<>|#".contains(c))
+            .any(|c| c.is_control() || "[]{}<>|".contains(c))
     {
         return None;
     }
@@ -566,7 +765,19 @@ pub(crate) fn canonical_template_target(name: &str) -> Option<String> {
     if qualified.ends_with(':') {
         return None;
     }
-    Some(crate::inline::normalize_title(&qualified))
+    let (page, fragment) = qualified.split_once('#').unwrap_or((&qualified, ""));
+    if page.is_empty() || page.ends_with(':') {
+        return None;
+    }
+    let mut result = crate::inline::normalize_title(page);
+    if result.is_empty() || result.ends_with(':') {
+        return None;
+    }
+    if qualified.contains('#') {
+        result.push('#');
+        result.push_str(&crate::inline::normalize_fragment(fragment));
+    }
+    Some(result)
 }
 
 fn marker(nonce: u128, index: usize) -> String {

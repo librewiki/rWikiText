@@ -610,8 +610,49 @@ pub(crate) fn sanitize(input: &str, wikitext: bool) -> Sanitized {
     let mut replacements = Vec::new();
     let mut pos = 0;
     while let Some(next) = input[pos..].find('<') {
-        output.push_str(&input[pos..pos + next]);
+        let copied = &input[pos..pos + next];
+        let line_prefix = if let Some(newline) = copied.rfind('\n') {
+            Some(&copied[newline + 1..])
+        } else if pos == 0 || input.as_bytes()[pos - 1] == b'\n' {
+            Some(copied)
+        } else {
+            None
+        };
+        output.push_str(copied);
         pos += next;
+        if wikitext && input[pos..].starts_with("<!--") {
+            if let Some(prefix) = line_prefix
+                .filter(|prefix| prefix.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r')))
+            {
+                if let Some(end) = input[pos..].find('\n') {
+                    let mut rest = &input[pos..pos + end];
+                    let mut complete = true;
+                    while !rest.is_empty() {
+                        rest = rest.trim_start_matches([' ', '\t', '\r']);
+                        if rest.is_empty() {
+                            break;
+                        }
+                        if let Some(comment) = rest.strip_prefix("<!--") {
+                            if let Some(close) = comment.find("-->") {
+                                rest = &comment[close + 3..];
+                                continue;
+                            }
+                        }
+                        complete = false;
+                        break;
+                    }
+                    if complete {
+                        output.truncate(output.len() - prefix.len());
+                        replacements.push((
+                            pos - prefix.len()..pos + end + 1,
+                            output.len()..output.len(),
+                        ));
+                        pos += end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
         let start = output.len();
         let length = sanitize_token(&input[pos..], pos, wikitext, &mut output, &mut diagnostics);
         if output.len() - start != length {

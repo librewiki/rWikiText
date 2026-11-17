@@ -7,7 +7,7 @@ pub(crate) fn metadata(call: &expansion::Invocation) -> (String, String) {
     let target = if let Some(function) = &call.function {
         json!({"wt": call.target, "function": function})
     } else {
-        json!({"wt": call.target, "href": format!("./{}", inline::encode_component(&call.title))})
+        json!({"wt": call.target, "href": inline::internal_href(&call.title).expect("canonical template title")})
     };
     let mut params = BTreeMap::new();
     let mut positional = Vec::new();
@@ -118,21 +118,40 @@ fn valid_target(target: &Value, wt: &str) -> bool {
         let Some(encoded) = href.strip_prefix("./") else {
             return false;
         };
-        let Ok(decoded) = inline::decode_component(encoded) else {
-            return false;
-        };
-        if target.get("function").is_some()
-            || inline::internal_href(&decoded).ok().as_deref() != Some(href)
-        {
+        // Separate the URL fragment before decoding: %23 in the path is not a
+        // fragment delimiter, and a literal query is not part of a title.
+        let (page, fragment) = encoded
+            .split_once('#')
+            .map_or((encoded, None), |(page, fragment)| (page, Some(fragment)));
+        if page.contains('?') {
             return false;
         }
+        let Ok(page) = inline::decode_component(page) else {
+            return false;
+        };
+        if page.contains(['#', '\\']) || target.get("function").is_some() {
+            return false;
+        }
+        let mut decoded = page;
+        if let Some(fragment) = fragment {
+            let Ok(fragment) = inline::decode_component(fragment) else {
+                return false;
+            };
+            decoded.push('#');
+            decoded.push_str(&fragment);
+        }
+        let Ok(normalized_href) = inline::internal_href(&decoded) else {
+            return false;
+        };
         if let Some(canonical) = expansion::canonical_template_target(wt) {
-            inline::normalize_title(&canonical) == decoded
+            inline::internal_href(&canonical).ok().as_deref() == Some(&normalized_href)
         } else {
             wt.contains("{{")
         }
     } else if let Some(function) = target["function"].as_str() {
-        let name = wt.split_once(':').map_or(wt, |(name, _)| name).trim();
+        let parts = expansion::split_top(wt, ':');
+        let name = expansion::strip_comments(parts[0]);
+        let name = name.trim();
         !name.is_empty()
             && (name.eq_ignore_ascii_case(function)
                 || name
@@ -192,7 +211,7 @@ fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<Str
             .map(|(key, value)| (key.as_str(), Some(value), false)),
     );
 
-    let mut call = format!("{{{{{wt}");
+    let mut fields = vec![wt.to_owned()];
     for (key, param, named) in ordered {
         let value = if let Some(param) = param {
             param["wt"].as_str()?
@@ -217,7 +236,7 @@ fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<Str
         if expansion::split_top(value, '|').len() != 1 {
             return None;
         }
-        call.push('|');
+        let mut field = String::new();
         if explicit {
             let source = key_source.unwrap_or(key);
             if !complete_key_comments(source)
@@ -227,14 +246,21 @@ fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<Str
             {
                 return None;
             }
-            call.push_str(source);
-            call.push('=');
+            field.push_str(source);
+            field.push('=');
         } else {
             positional += 1;
         }
-        call.push_str(value);
+        field.push_str(value);
+        fields.push(field);
     }
-    call.push_str("}}");
+    let inner = fields.join("|");
+    // A comment, nowiki, link or nested construct must not consume a separator
+    // between independently supplied metadata fields.
+    if expansion::split_top(&inner, '|') != fields.iter().map(String::as_str).collect::<Vec<_>>() {
+        return None;
+    }
+    let call = format!("{{{{{inner}}}}}");
     if wt.contains(|ch: char| ch.is_control() && !ch.is_ascii_whitespace())
         || expansion::split_top(wt, '|').len() != 1
         || call.contains('\0')

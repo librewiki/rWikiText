@@ -30,7 +30,9 @@ The complete fixtures in `tests/fixtures/milestone.*` cover all four conversions
 
 The `transclusion`, `wiki_links`, `functions`, and `parsoid_transclusion` integration suites exercise caller-thread lookups, the three lookup outcomes, each configurable expansion limit, and CLI conversion using `tests/fixtures/wiki-data.json`. They compare selected release fixtures for template inclusion, red links, image sizing and caption behavior, magic words, and bundled conditional functions. The Parsoid comparisons include template calls with a computed name, list transclusion, missing templates, and the `data-mw` for core padding functions.
 
-The verified parser-function subset covers Unicode case conversion, padding, template-syntax escape words, page-title and language variables, numeric UTC time variables, and the bundled `#if`, `#ifeq`, `#ifexist`, and `#switch` functions. HTML template recovery supports standalone and inline transclusion groups with validated targets and arguments. Transclusions that generate partial tags or link targets can render as content with a conversion-loss diagnostic for the invocation.
+The verified parser-function subset covers Unicode case conversion, padding, template-syntax escape words, page-title and language variables, UTC calendar variables, `#tag:nowiki`, `#tag:pre`, and the bundled `#if`, `#ifeq`, `#ifexist`, and `#switch` functions. Calendar names use the pinned standalone Parsoid handlers' English spelling, including the same month name for `CURRENTMONTHNAME` and `CURRENTMONTHNAMEGEN`. MediaWiki's integrated parser supplies localized date names through its page language.
+
+HTML template recovery supports standalone and inline transclusion groups with validated targets and arguments. Transclusions that generate partial tags, link targets, or combined blocks can render as content with a conversion-loss diagnostic for the invocation.
 
 ## First-release verification
 
@@ -44,7 +46,7 @@ cargo test --locked -- --include-ignored --nocapture
 
 The [pinned parser case inventory](parser-case-inventory.md) records the source cases and the scope of the upstream comparison.
 
-The 2026-11-17 run on Windows x86-64 used Rust 1.100.0 and PHP 8.4.27. The archive checksum and all-target type check passed. The full suite passed 130 tests with zero ignored, including the enabled release fixtures and 27 newly selected upstream parser cases. The inventory records the outstanding core cases.
+The 2026-11-17 run on Windows x86-64 used Rust 1.100.0 and PHP 8.4.27. The archive checksum, all-target type check, and full suite passed with 154 tests and zero ignored. The forward corpus audit wrote 2,670 case records, with 242 scope exclusions and 581 DOM differences to review. The inventory explains each status and records confirmed core gaps.
 
 | Release contract | Verification |
 | --- | --- |

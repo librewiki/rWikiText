@@ -1,6 +1,6 @@
 use rwikitext::{
-    convert_with_options, ConversionOptions, ConversionRequest, ConversionResult, DiagnosticKind,
-    FileInfo, Format, LookupError, WikiContext, WikiData,
+    convert_with_options, ConversionError, ConversionOptions, ConversionRequest, ConversionResult,
+    DiagnosticKind, FileInfo, Format, LookupError, WikiContext, WikiData,
 };
 use scraper::Html;
 use serde_json::Value;
@@ -9,6 +9,9 @@ use std::path::Path;
 
 #[path = "support/document.rs"]
 mod document;
+
+#[path = "support/parser_case_audit.rs"]
+mod parser_case_audit;
 
 use document::document_structure;
 
@@ -129,23 +132,36 @@ fn rendered(case: &[(&str, &str)], title: &str, wiki: &Fixture<'_>) -> Conversio
             .unwrap_or("en"),
         reference_time: "1970-01-01T00:02:03Z",
     };
+    render_wikitext(
+        section(case, "wikitext").expect("upstream wikitext input"),
+        &context,
+        wiki,
+    )
+    .unwrap_or_else(|e| panic!("convert upstream case {title:?}: {e}"))
+}
+
+fn render_wikitext(
+    input: &str,
+    context: &WikiContext<'_>,
+    wiki: &Fixture<'_>,
+) -> Result<ConversionResult, ConversionError> {
     convert_with_options(
         ConversionRequest {
             source: Format::Wikitext,
             target: Format::Html,
-            input: section(case, "wikitext").expect("upstream wikitext input"),
-            context: &context,
+            input,
+            context,
         },
         ConversionOptions {
             wiki_data: Some(wiki),
             ..Default::default()
         },
     )
-    .unwrap_or_else(|e| panic!("convert upstream case {title:?}: {e}"))
 }
 
 fn expected_html<'a>(case: &[(&str, &'a str)]) -> &'a str {
-    section(case, "html/parsoid")
+    section(case, "html/parsoid+standalone")
+        .or_else(|| section(case, "html/parsoid"))
         .or_else(|| section(case, "html/parsoid+integrated"))
         .or_else(|| section(case, "html"))
         .or_else(|| section(case, "html/*"))
@@ -244,8 +260,59 @@ fn templates_expand_arguments_and_resolve_names() {
             "Template with complex arguments",
             "Template passing argument to another template",
             "Templates: Strip leading and trailing whitespace from named-param values",
+            "Templates: Recognize targets when newlines and comments don't split the target",
+            "Templates: Handle comments in the target",
+            "Templates: Handle empty comment-and-ws-only lines correctly",
+            "Transclusion with a (stripped) fragment",
+            "Template titles with entities in them",
         ],
     );
+}
+
+#[test]
+#[ignore = "requires the verified MediaWiki archive; see docs/compatibility.md"]
+fn unusual_parameter_keys_and_brace_precedence() {
+    check_cases(
+        PARSOID_CASES,
+        &[
+            "Templates: Other wikitext in parameter names (T69657)",
+            "Templates: Preserve blank parameter names",
+            "Templates: Preserve blank parameter names in other positions",
+            "Template parameter named \"constructor\"",
+        ],
+    );
+    check_cases(
+        "tests/parser/preprocessor.txt",
+        &["Preprocessor precedence 5: tplarg takes precedence over template"],
+    );
+}
+
+#[test]
+#[ignore = "requires the verified MediaWiki archive; see docs/compatibility.md"]
+fn template_expansion_can_start_its_own_block() {
+    check_cases(
+        CORE_CASES,
+        &["T2529: Template with table, not included at beginning of line"],
+    );
+    let source = read_fixture(CORE_CASES);
+    let wiki = Fixture::parse(&source);
+    let title = "Implicit newline insertion/sol when expanding templates (T241150/T14974/T2529)";
+    let case = wiki.case(title);
+    let actual = rendered(case, title, &wiki);
+    assert_eq!(
+        document_structure(&actual.content),
+        document_structure(expected_html(case))
+    );
+    let input = section(case, "wikitext").unwrap();
+    let losses: Vec<_> = actual
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(diagnostic.kind, DiagnosticKind::ConversionLoss);
+            &input[diagnostic.span.clone()]
+        })
+        .collect();
+    assert_eq!(losses, ["{{1x|#foo}}", "{{1x|#foo}}"]);
 }
 
 #[test]
@@ -346,6 +413,21 @@ fn equals_escape_and_explicit_template_name_are_distinct() {
         &[
             "Basic usage of {{=}}",
             "Using {{Template:=}} doesn't invoke the parser function",
+        ],
+    );
+}
+
+#[test]
+#[ignore = "requires the verified MediaWiki archive; see docs/compatibility.md"]
+fn core_tag_function_handles_nowiki_and_pre() {
+    check_cases(
+        "tests/parser/extTags.txt",
+        &[
+            "Extension tags in extension content: <nowiki>",
+            "Extension tags in extension content: <pre>",
+            "Extension tags in extension attributes: <pre>",
+            "Extension tags in extension name",
+            "Doubly-nested tags",
         ],
     );
 }

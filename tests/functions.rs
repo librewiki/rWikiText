@@ -173,6 +173,169 @@ fn utc_weekday_and_iso_week_follow_the_calendar_year_boundary() {
 }
 
 #[test]
+fn parsoid_calendar_names_follow_reference_time_in_non_english_contexts() {
+    let input = "{{CURRENTDAYNAME}} / {{CURRENTMONTHABBREV}} / {{CURRENTMONTHNAME}} / {{CURRENTMONTHNAMEGEN}}";
+    for (site_language, reference_time, expected) in [
+        (
+            "ko",
+            "1970-01-01T00:02:03Z",
+            "Thursday / Jan / January / January",
+        ),
+        (
+            "ru",
+            "2000-02-29T00:00:00Z",
+            "Tuesday / Feb / February / February",
+        ),
+    ] {
+        let result = convert_with_options(
+            ConversionRequest {
+                source: Format::Wikitext,
+                target: Format::Html,
+                input,
+                context: &WikiContext {
+                    site_language,
+                    reference_time,
+                    ..WikiContext::default()
+                },
+            },
+            ConversionOptions::default(),
+        )
+        .unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let text = scraper::Html::parse_fragment(&result.content)
+            .root_element()
+            .text()
+            .collect::<String>();
+        assert_eq!(text, expected, "{site_language} {reference_time}");
+    }
+}
+
+#[test]
+fn core_tag_function_renders_nowiki_and_pre_content() {
+    for (input, selector, expected, class) in [
+        ("{{#tag:nowiki|a<nowiki>b</nowiki>c}}", "p", "abc", None),
+        ("{{#tag:pre|a<nowiki>b</nowiki>c}}", "pre", "abc", None),
+        ("{{#tag:pre|&lt;}}", "pre", "<", None),
+        (
+            "{{#tag:pre|Foo <nowiki>&rarr;bar</nowiki>}}",
+            "pre",
+            "Foo →bar",
+            None,
+        ),
+        (
+            "{{#tag:pre|content|class=a<nowiki>b</nowiki>c}}",
+            "pre",
+            "content",
+            Some("ac"),
+        ),
+        (
+            "{{#tag:no<nowiki>ignored</nowiki>wiki|content}}",
+            "p",
+            "content",
+            None,
+        ),
+        (
+            "{{#tag:nowiki|more {{#tag:nowiki|content <nowiki>here</nowiki>}}}}",
+            "p",
+            "more content here",
+            None,
+        ),
+        (
+            "{{#tag:pre|</pre><script>bad()</script>}}",
+            "pre",
+            "</pre><script>bad()</script>",
+            None,
+        ),
+    ] {
+        let result = convert_with_options(
+            ConversionRequest {
+                source: Format::Wikitext,
+                target: Format::Html,
+                input,
+                context: &WikiContext::default(),
+            },
+            ConversionOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            result.diagnostics.is_empty(),
+            "{input}: {:?}",
+            result.diagnostics
+        );
+        let dom = scraper::Html::parse_fragment(&result.content);
+        let selector = scraper::Selector::parse(selector).unwrap();
+        let element = dom.select(&selector).next().expect(&result.content);
+        assert_eq!(element.text().collect::<String>(), expected, "{input}");
+        assert_eq!(element.attr("class"), class, "{input}");
+    }
+}
+
+#[test]
+fn core_tag_function_applies_the_html_attribute_policy() {
+    use rwikitext::ConversionMode;
+
+    let input = "{{#tag:pre|line|class=report|style=color&#58;red|title=x&amp;y|onclick=alert(1)}}";
+    let result = convert_with_options(
+        ConversionRequest {
+            source: Format::Wikitext,
+            target: Format::Html,
+            input,
+            context: &WikiContext::default(),
+        },
+        ConversionOptions {
+            mode: ConversionMode::Strict,
+            ..ConversionOptions::default()
+        },
+    )
+    .unwrap();
+    let [removed] = result.diagnostics.as_slice() else {
+        panic!(
+            "expected a diagnosed attribute removal, got {:?}",
+            result.diagnostics
+        )
+    };
+    assert_eq!(removed.kind, DiagnosticKind::HtmlRemoval);
+    assert_eq!(&input[removed.span.clone()], input);
+    assert!(removed.message.contains("onclick"), "{removed}");
+    let doc = scraper::Html::parse_fragment(&result.content);
+    let pre = doc
+        .select(&scraper::Selector::parse("pre.report").unwrap())
+        .next()
+        .unwrap();
+    assert_eq!(pre.text().collect::<String>(), "line");
+    assert_eq!(pre.attr("style"), Some("color:red"));
+    assert_eq!(pre.attr("title"), Some("x&y"));
+    assert!(pre.attr("onclick").is_none());
+}
+
+#[test]
+fn strict_mode_reports_an_unavailable_extension_parser_function() {
+    use rwikitext::ConversionMode;
+
+    let call = "{{#invoke:Example|run}}";
+    let input = format!("앞 {call}");
+    let error = convert_with_options(
+        ConversionRequest {
+            source: Format::Wikitext,
+            target: Format::Html,
+            input: &input,
+            context: &WikiContext::default(),
+        },
+        ConversionOptions {
+            mode: ConversionMode::Strict,
+            ..ConversionOptions::default()
+        },
+    )
+    .unwrap_err();
+    let [loss] = error.diagnostics() else {
+        panic!("expected one conversion loss, got {error:?}")
+    };
+    assert_eq!(loss.kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(&input[loss.span.clone()], call);
+    assert!(loss.message.contains("parser function"), "{loss}");
+}
+
+#[test]
 #[ignore = "requires scripts/fetch-compatibility.py"]
 fn pinned_magic_word_cases() {
     let source =
@@ -181,8 +344,12 @@ fn pinned_magic_word_cases() {
     for name in [
         "CURRENTDAY",
         "CURRENTDAY2",
+        "CURRENTDAYNAME",
         "CURRENTMONTH",
         "CURRENTMONTH1",
+        "CURRENTMONTHABBREV",
+        "CURRENTMONTHNAME",
+        "CURRENTMONTHNAMEGEN",
         "CURRENTTIME",
         "CURRENTHOUR",
         "CURRENTYEAR",

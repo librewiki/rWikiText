@@ -18,6 +18,8 @@ impl WikiData for Data {
             "Template:Loop" => Ok(Some("{{Loop}}".into())),
             "Template:Big" => Ok(Some("Ω界".into())),
             "Template:One" => Ok(Some("1".into())),
+            "Template:1x" => Ok(Some("{{{1}}}".into())),
+            "Template:Table" => Ok(Some("{|\n| 1 || 2\n|-\n| 3 || 4\n|}".into())),
             "Template:Mixed_name" => Ok(Some("normalized".into())),
             "Template:Unused" => Ok(Some("good".into())),
             "Template:Fail" => Err(LookupError::new("offline")),
@@ -51,6 +53,123 @@ fn body(html: &str) -> String {
         .text()
         .collect()
 }
+
+#[test]
+fn adjacent_template_expansions_can_start_separate_list_items() {
+    let result = run(
+        "{{1x|#foo}}{{1x|#foo}}",
+        &Data::default(),
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    let document = scraper::Html::parse_fragment(&result.content);
+    let items = scraper::Selector::parse("ol > li").unwrap();
+    assert_eq!(
+        document
+            .select(&items)
+            .map(|item| item.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["foo", "foo"]
+    );
+}
+
+#[test]
+fn a_template_can_start_a_table_after_inline_text() {
+    let result = run(
+        "foo {{table}}",
+        &Data::default(),
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let document = scraper::Html::parse_fragment(&result.content);
+    let paragraph = scraper::Selector::parse("p").unwrap();
+    assert_eq!(
+        document
+            .select(&paragraph)
+            .next()
+            .unwrap()
+            .text()
+            .collect::<String>()
+            .trim(),
+        "foo"
+    );
+    let table = scraper::Selector::parse("table td").unwrap();
+    assert_eq!(
+        document
+            .select(&table)
+            .map(|cell| cell.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["1", "2", "3", "4"]
+    );
+    let transclusion =
+        scraper::Selector::parse("table[typeof='mw:Transclusion'][data-mw]").unwrap();
+    assert!(
+        document.select(&transclusion).next().is_some(),
+        "{}",
+        result.content
+    );
+}
+
+#[test]
+fn a_parser_function_in_a_link_target_does_not_start_a_block() {
+    let input = "[[Foo{{lc:#Section}}|target]]";
+    let result = run(input, &Data::default(), ExpansionLimits::default()).unwrap();
+    let document = scraper::Html::parse_fragment(&result.content);
+    let links = scraper::Selector::parse("a[href='./Foo?action=edit&redlink=1#section']").unwrap();
+    assert_eq!(
+        document
+            .select(&links)
+            .map(|link| link.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["target"]
+    );
+    let [loss] = result.diagnostics.as_slice() else {
+        panic!(
+            "expected a loss for the partial link, got {:?}",
+            result.diagnostics
+        )
+    };
+    assert_eq!(loss.kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(&input[loss.span.clone()], "{{lc:#Section}}");
+}
+
+#[test]
+fn a_parser_function_in_a_bracketed_external_link_keeps_the_label() {
+    let input = "[https://example.org {{lc:#Label}}]";
+    let result = run(input, &Data::default(), ExpansionLimits::default()).unwrap();
+    let document = scraper::Html::parse_fragment(&result.content);
+    let links = scraper::Selector::parse("a[href='https://example.org']").unwrap();
+    assert_eq!(
+        document
+            .select(&links)
+            .map(|link| link.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["#label"]
+    );
+}
+
+#[test]
+fn a_less_than_sign_in_plain_text_does_not_prevent_a_template_list() {
+    let result = run(
+        "2 < 3 {{1x|*Text}}",
+        &Data::default(),
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    let document = scraper::Html::parse_fragment(&result.content);
+    let item = scraper::Selector::parse("ul > li").unwrap();
+    assert_eq!(
+        document
+            .select(&item)
+            .next()
+            .unwrap()
+            .text()
+            .collect::<String>(),
+        "Text"
+    );
+}
+
 #[test]
 fn nested_arguments_defaults_and_inclusion() {
     let data = Data::default();
@@ -154,6 +273,77 @@ fn independent_expansion_limits_fail() {
     .unwrap();
     assert!(result.diagnostics.is_empty());
     assert_eq!(body(&result.content), "Ω界");
+}
+
+#[test]
+fn malformed_template_fallback_stops_before_the_next_argument_lookup() {
+    let data = Data::default();
+    let input = "{{[]|{{Big}}|{{Big}}|{{Big}}|{{Big}}|{{Big}}|{{Fail}}}}";
+    let error = run(
+        input,
+        &data,
+        ExpansionLimits {
+            max_output_bytes: 40,
+            ..ExpansionLimits::default()
+        },
+    )
+    .unwrap_err();
+    let [diagnostic] = error.diagnostics() else {
+        panic!("expected one expansion limit diagnostic, got {error:?}")
+    };
+    assert_eq!(diagnostic.kind, DiagnosticKind::ExpansionLimit);
+    assert_eq!(&input[diagnostic.span.clone()], input);
+    assert!(!data
+        .calls
+        .borrow()
+        .iter()
+        .any(|title| title == "Template:Fail"));
+}
+
+#[test]
+fn pre_tag_attributes_stop_expanding_when_the_combined_output_is_too_large() {
+    let data = Data::default();
+    let input =
+        "{{#tag:pre|text|title={{Big}}|title={{Big}}|title={{Big}}|title={{Big}}|title={{Fail}}}}";
+    let error = run(
+        input,
+        &data,
+        ExpansionLimits {
+            max_output_bytes: 48,
+            ..ExpansionLimits::default()
+        },
+    )
+    .unwrap_err();
+    let [diagnostic] = error.diagnostics() else {
+        panic!("expected one expansion limit diagnostic, got {error:?}")
+    };
+    assert_eq!(diagnostic.kind, DiagnosticKind::ExpansionLimit);
+    assert_eq!(&input[diagnostic.span.clone()], input);
+    assert!(!data
+        .calls
+        .borrow()
+        .iter()
+        .any(|title| title == "Template:Fail"));
+}
+
+#[test]
+fn a_missing_template_in_nowiki_uses_deterministic_literal_text() {
+    let input = "{{#tag:nowiki|{{Absent}}}}";
+    let result = run(input, &Data::default(), ExpansionLimits::default()).unwrap();
+    assert_eq!(body(&result.content), "[[:Template:Absent]]");
+    assert!(result.diagnostics.iter().all(|loss| {
+        loss.kind == DiagnosticKind::ConversionLoss && &input[loss.span.clone()] == input
+    }));
+}
+
+#[test]
+fn a_template_title_that_normalizes_to_empty_stays_literal() {
+    let data = Data::default();
+    let input = "{{:_}} / {{:_#Section}}";
+    let result = run(input, &data, ExpansionLimits::default()).unwrap();
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(body(&result.content), input);
+    assert!(data.calls.borrow().is_empty());
 }
 
 #[test]

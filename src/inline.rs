@@ -300,6 +300,16 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
                 None => (link, link),
             };
             let target = decoded(target);
+            let href = match internal_href(&target) {
+                Ok(href) => href,
+                Err(_) => {
+                    text(&mut out, "[[");
+                    out.extend(parse(link, language, false)?);
+                    text(&mut out, "]]");
+                    pos += end + 4;
+                    continue;
+                }
+            };
             let trail_len = body[end + 2..]
                 .bytes()
                 .take_while(|b| b.is_ascii_lowercase())
@@ -322,7 +332,7 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
             let mut label = parse(label, language, false)?;
             text(&mut label, &body[end + 2..end + 2 + trail_len]);
             out.push(Inline::Link {
-                href: internal_href(&target)?,
+                href,
                 label,
                 internal: true,
             });

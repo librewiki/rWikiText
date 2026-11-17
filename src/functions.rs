@@ -15,10 +15,20 @@ fn variable(name: &str, context: &WikiContext<'_>, page_title: &str) -> Option<S
         "SUBPAGENAME" => page.rsplit('/').next().unwrap_or(page).into(),
         "BASEPAGENAME" => page.rsplit_once('/').map_or(page, |(base, _)| base).into(),
         "ROOTPAGENAME" => page.split('/').next().unwrap_or(page).into(),
-        "CURRENTYEAR" | "CURRENTMONTH" | "CURRENTMONTH1" | "CURRENTDAY" | "CURRENTDAY2"
-        | "CURRENTHOUR" | "CURRENTTIME" | "CURRENTTIMESTAMP" | "CURRENTDOW" | "CURRENTWEEK" => {
-            time_value(name, context.reference_time)?
-        }
+        "CURRENTYEAR"
+        | "CURRENTMONTH"
+        | "CURRENTMONTH1"
+        | "CURRENTDAY"
+        | "CURRENTDAY2"
+        | "CURRENTHOUR"
+        | "CURRENTTIME"
+        | "CURRENTTIMESTAMP"
+        | "CURRENTDOW"
+        | "CURRENTWEEK"
+        | "CURRENTDAYNAME"
+        | "CURRENTMONTHABBREV"
+        | "CURRENTMONTHNAME"
+        | "CURRENTMONTHNAMEGEN" => time_value(name, context.reference_time)?,
         _ => return None,
     })
 }
@@ -33,6 +43,34 @@ fn split_title(title: &str) -> (&str, &str) {
 }
 
 fn time_value(name: &str, time: &str) -> Option<String> {
+    // Pinned Parsoid formats these through PHP DateTime, which uses English names
+    // regardless of page language and currently treats month genitive as nominative.
+    const DAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    const MONTHS_SHORT: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let b = time.as_bytes();
     if b.len() != 20
         || b[4] != b'-'
@@ -120,6 +158,15 @@ fn time_value(name: &str, time: &str) -> Option<String> {
         "CURRENTTIMESTAMP" => format!("{year}{month}{day}{hour}{minute}{second}"),
         "CURRENTDOW" => calendar()?.0.to_string(),
         "CURRENTWEEK" => calendar()?.1.to_string(),
+        "CURRENTDAYNAME" => DAYS[calendar()?.0 as usize].into(),
+        "CURRENTMONTHABBREV" => {
+            calendar()?;
+            MONTHS_SHORT[(m - 1) as usize].into()
+        }
+        "CURRENTMONTHNAME" | "CURRENTMONTHNAMEGEN" => {
+            calendar()?;
+            MONTHS[(m - 1) as usize].into()
+        }
         _ => return None,
     })
 }
@@ -224,6 +271,7 @@ pub(crate) fn evaluate(
     context: &WikiContext<'_>,
     data: &dyn crate::WikiData,
     source: std::ops::Range<usize>,
+    max_output_bytes: usize,
     mut expand: impl FnMut(&str) -> Result<String, crate::ConversionError>,
 ) -> Result<Option<String>, crate::ConversionError> {
     let key = name.trim().to_ascii_uppercase();
@@ -257,6 +305,75 @@ pub(crate) fn evaluate(
         }
     }
     let value = match key.as_str() {
+        "#TAG" => {
+            let tag = remove_nowiki(&expand(args.first().copied().unwrap_or(""))?, false);
+            let tag = tag.trim().to_ascii_lowercase();
+            if !matches!(tag.as_str(), "nowiki" | "pre") {
+                return Ok(None);
+            }
+            let content = remove_nowiki(&expand(args.get(1).copied().unwrap_or(""))?, true);
+            if tag == "nowiki" {
+                // Emit literal characters as entities so embedded closing tags cannot
+                // escape the literal and affect the rest of the document.
+                html_escape::decode_html_entities(&content)
+                    .chars()
+                    .map(|c| format!("&#{};", c as u32))
+                    .collect()
+            } else {
+                let content = html_escape::decode_html_entities(&content);
+                let content = html_escape::encode_text(&content);
+                let base_size = "<pre></pre>".len().saturating_add(content.len());
+                let check_size = |size: usize| {
+                    if size > max_output_bytes {
+                        Err(crate::ConversionError::expansion_limit(
+                            source.clone(),
+                            "template expansion output byte limit exceeded",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
+                check_size(base_size)?;
+                let mut attributes = String::new();
+                for arg in args.iter().skip(2) {
+                    let parts = crate::expansion::split_top(arg, '=');
+                    if parts.len() < 2 {
+                        continue;
+                    }
+                    let name = remove_nowiki(&expand(parts[0])?, false);
+                    let name = name.trim();
+                    if name.is_empty()
+                        || !name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
+                    {
+                        continue;
+                    }
+                    check_size(
+                        base_size
+                            .saturating_add(attributes.len())
+                            .saturating_add(name.len())
+                            .saturating_add(4),
+                    )?;
+                    let value = remove_nowiki(&expand(&parts[1..].join("="))?, false);
+                    let value = html_escape::decode_html_entities(value.trim());
+                    let value = html_escape::encode_double_quoted_attribute(&value);
+                    check_size(
+                        base_size
+                            .saturating_add(attributes.len())
+                            .saturating_add(name.len())
+                            .saturating_add(value.len())
+                            .saturating_add(4),
+                    )?;
+                    attributes.push(' ');
+                    attributes.push_str(name);
+                    attributes.push_str("=\"");
+                    attributes.push_str(&value);
+                    attributes.push('"');
+                }
+                format!("<pre{attributes}>{content}</pre>")
+            }
+        }
         "#IF" => {
             let test = expand(args.first().copied().unwrap_or(""))?;
             expand(
@@ -365,6 +482,34 @@ pub(crate) fn evaluate(
     Ok(Some(value))
 }
 
+// Literal nowiki segments act as strip markers during #tag expansion: their
+// contents survive in tag bodies but disappear from names and attributes.
+fn remove_nowiki(input: &str, keep_content: bool) -> String {
+    let mut result = String::new();
+    let mut rest = input;
+    let lowercase = input.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(start) = lowercase[offset..].find("<nowiki>") {
+        result.push_str(&rest[..start]);
+        let body = &rest[start + 8..];
+        let body_offset = offset + start + 8;
+        if let Some(end) = lowercase[body_offset..].find("</nowiki>") {
+            if keep_content {
+                result.push_str(&body[..end]);
+            }
+            rest = &body[end + 9..];
+            offset = body_offset + end + 9;
+        } else {
+            if keep_content {
+                result.push_str(body);
+            }
+            return result;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
 // A page title is data, so punctuation in it must not become wiki markup.
 fn escape_wikitext(value: &str) -> String {
     let mut out = String::new();
@@ -405,6 +550,7 @@ mod tests {
             &context,
             &Data,
             0..1,
+            usize::MAX,
             |s| {
                 seen.push(s.to_owned());
                 Ok(s.to_owned())
@@ -420,6 +566,7 @@ mod tests {
             &context,
             &Data,
             0..1,
+            usize::MAX,
             |s| Ok(s.to_owned()),
         );
         assert!(result.is_err());
