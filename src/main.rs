@@ -1,4 +1,6 @@
-use rwikitext::{convert, ConversionRequest, Format, WikiContext};
+use rwikitext::{
+    convert_with_mode, ConversionError, ConversionMode, ConversionRequest, Format, WikiContext,
+};
 use std::io::{self, Read, Write};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -6,9 +8,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut page_title = String::new();
     let mut site_language = String::from("en");
     let mut reference_time = String::from("1970-01-01T00:00:00Z");
+    let mut mode = ConversionMode::BestEffort;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--strict" => mode = ConversionMode::Strict,
             "--page-title" => page_title = args.next().ok_or("missing value for --page-title")?,
             "--site-language" => {
                 site_language = args.next().ok_or("missing value for --site-language")?
@@ -23,7 +27,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if !(2..=3).contains(&positional.len()) {
-        return Err("usage: rwikitext <wikitext|gfm|html> <wikitext|gfm|html> [FILE|-] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]".into());
+        return Err("usage: rwikitext <wikitext|gfm|html> <wikitext|gfm|html> [FILE|-] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]".into());
     }
     let source: Format = positional[0].parse()?;
     let target: Format = positional[1].parse()?;
@@ -39,21 +43,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         site_language: &site_language,
         reference_time: &reference_time,
     };
-    let result = convert(ConversionRequest {
-        source,
-        target,
-        input: &input,
-        context: &context,
-    })?;
+    let result = convert_with_mode(
+        ConversionRequest {
+            source,
+            target,
+            input: &input,
+            context: &context,
+        },
+        mode,
+    )?;
     for diagnostic in result.diagnostics {
-        eprintln!("{}", diagnostic.message);
+        eprintln!("{diagnostic}");
     }
     io::stdout().write_all(result.content.as_bytes())?;
     Ok(())
 }
 fn main() {
     if let Err(error) = run() {
-        eprintln!("rwikitext: {error}");
+        if let Some(error) = error
+            .downcast_ref::<ConversionError>()
+            .filter(|error| !error.diagnostics().is_empty())
+        {
+            for diagnostic in error.diagnostics() {
+                eprintln!("{diagnostic}");
+            }
+        } else {
+            eprintln!("rwikitext: {error}");
+        }
         std::process::exit(1);
     }
 }

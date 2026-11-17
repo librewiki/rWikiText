@@ -1,10 +1,17 @@
+mod core;
+mod html;
+mod html_policy;
 mod inline;
+mod metadata;
+mod table;
 
 use inline::Inline;
 use std::fmt;
+use std::ops::Range;
 use std::str::FromStr;
 
-use scraper::{Html, Node};
+pub(crate) use html::parse_html_inlines;
+use html::{embedded_html, html_to_wiki, parse_gfm, parse_html};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -41,6 +48,7 @@ impl Default for WikiContext<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ConversionRequest<'a> {
     pub source: Format,
     pub target: Format,
@@ -51,12 +59,57 @@ pub struct ConversionRequest<'a> {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PageMetadata {
     pub categories: Vec<String>,
+    pub category_sort_keys: Vec<Option<String>>,
     pub redirect_target: Option<String>,
     pub display_title: Option<String>,
 }
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionMode {
+    #[default]
+    BestEffort,
+    Strict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticKind {
+    ConversionLoss,
+    HtmlRemoval,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    pub kind: DiagnosticKind,
+    /// Half-open byte range in the original input.
+    pub span: Range<usize>,
     pub message: String,
+}
+
+impl Diagnostic {
+    fn new(kind: DiagnosticKind, span: Range<usize>, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            span,
+            message: message.into(),
+        }
+    }
+
+    fn loss(span: Range<usize>, message: impl Into<String>) -> Self {
+        Self::new(DiagnosticKind::ConversionLoss, span, message)
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match self.kind {
+            DiagnosticKind::ConversionLoss => "conversion loss",
+            DiagnosticKind::HtmlRemoval => "HTML removal",
+        };
+        write!(
+            f,
+            "{kind} at bytes {}..{}: {}",
+            self.span.start, self.span.end, self.message
+        )
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionResult {
@@ -67,12 +120,18 @@ pub struct ConversionResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionError {
     message: String,
+    diagnostics: Vec<Diagnostic>,
 }
 impl ConversionError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            diagnostics: Vec::new(),
         }
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
     }
 }
 impl fmt::Display for ConversionError {
@@ -89,14 +148,10 @@ struct Document {
 
 enum Block {
     Paragraph(Vec<Inline>),
-    Heading {
-        level: u8,
-        text: Vec<Inline>,
-    },
-    List {
-        ordered: bool,
-        items: Vec<Vec<Inline>>,
-    },
+    Heading { level: u8, text: Vec<Inline> },
+    Core(core::Block),
+    Table(table::Table),
+    Html(String),
 }
 
 fn heading_id(text: &[Inline], ids: &mut std::collections::HashSet<String>) -> String {
@@ -111,6 +166,13 @@ fn heading_id(text: &[Inline], ids: &mut std::collections::HashSet<String>) -> S
 }
 
 pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, ConversionError> {
+    convert_with_mode(request, ConversionMode::BestEffort)
+}
+
+pub fn convert_with_mode(
+    request: ConversionRequest<'_>,
+    mode: ConversionMode,
+) -> Result<ConversionResult, ConversionError> {
     if !matches!(
         (request.source, request.target),
         (Format::Wikitext, Format::Gfm | Format::Html)
@@ -118,384 +180,397 @@ pub fn convert(request: ConversionRequest<'_>) -> Result<ConversionResult, Conve
     ) {
         return Err(ConversionError::new("unsupported conversion direction"));
     }
-    let document = match request.source {
-        Format::Wikitext => parse_wikitext(request.input, request.context.site_language)?,
-        Format::Gfm => parse_gfm(request.input)?,
-        Format::Html => parse_html(request.input)?,
+
+    let mut diagnostics = Vec::new();
+    let (document, page_metadata) = match request.source {
+        Format::Wikitext => {
+            let metadata = metadata::extract_wikitext(request.input, request.context)?;
+            if request.target == Format::Gfm {
+                diagnostics.extend(metadata.locations.into_iter().map(|location| {
+                    Diagnostic::loss(
+                        location.start..location.end,
+                        format!("saving the GFM body alone loses the {}", location.kind),
+                    )
+                }));
+            }
+            let (without_templates, template_losses) = strip_transclusions(&metadata.body);
+            let template_ranges: Vec<_> = template_losses
+                .iter()
+                .map(|loss| loss.span.clone())
+                .collect();
+            let sanitized = html_policy::sanitize(&without_templates, true);
+            let map_template_span =
+                |span| original_range(original_range(span, &template_ranges), &metadata.ranges);
+            let document = parse_wikitext(
+                &sanitized.text,
+                request.context.site_language,
+                &|span| map_template_span(sanitized.original_span(span)),
+                &mut diagnostics,
+            );
+            diagnostics.extend(template_losses.into_iter().map(|mut diagnostic| {
+                diagnostic.span = original_range(diagnostic.span, &metadata.ranges);
+                diagnostic
+            }));
+            diagnostics.extend(sanitized.diagnostics.into_iter().map(|mut diagnostic| {
+                diagnostic.span = map_template_span(diagnostic.span);
+                diagnostic
+            }));
+            (document, metadata.metadata)
+        }
+        Format::Html => {
+            let metadata = metadata::extract_html(request.input, request.context)?;
+            let document = parse_html(
+                &metadata.body,
+                request.input,
+                &metadata.ranges,
+                &mut diagnostics,
+            )?;
+            (document, metadata.metadata)
+        }
+        Format::Gfm => (
+            parse_gfm(request.input, &mut diagnostics)?,
+            PageMetadata::default(),
+        ),
     };
-    let mut ids = std::collections::HashSet::<String>::new();
+
+    let separator = if request.target == Format::Html {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let mut headings = std::collections::HashSet::new();
     let mut previous_list: Option<(bool, bool)> = None;
-    let content = document
-        .blocks
-        .iter()
-        .map(|block| {
-            let alternate = match block {
-                Block::List { ordered, .. } => {
-                    let alternate = previous_list
-                        .map(|(last, alt)| last == *ordered && !alt)
-                        .unwrap_or(false);
-                    previous_list = Some((*ordered, alternate));
-                    alternate
-                }
-                _ => {
-                    previous_list = None;
-                    false
-                }
-            };
-            match (request.target, block) {
-                (Format::Wikitext, Block::Paragraph(text)) => render_inline(text, Format::Wikitext),
-                (Format::Wikitext, Block::Heading { level, text }) => {
+    let mut blocks = Vec::new();
+    for block in document.blocks {
+        let alternate = if let Block::Core(block) = &block {
+            core::list_type(block).map(|ordered| {
+                let alternate = previous_list.is_some_and(|(last, alt)| last == ordered && !alt);
+                (ordered, alternate)
+            })
+        } else {
+            None
+        };
+        previous_list = alternate;
+        let rendered = match &block {
+            Block::Paragraph(text) => match request.target {
+                Format::Html => format!("<p>{}</p>", render_inline(text, Format::Html)),
+                format => render_inline(text, format),
+            },
+            Block::Heading { level, text } => match request.target {
+                Format::Wikitext => {
                     let delimiter = "=".repeat(*level as usize);
                     format!(
                         "{delimiter} {} {delimiter}",
                         render_inline(text, Format::Wikitext)
                     )
                 }
-                (Format::Gfm, Block::Paragraph(text)) => render_inline(text, Format::Gfm),
-                (Format::Gfm, Block::Heading { level, text }) => {
-                    format!(
-                        "{} {}",
-                        "#".repeat(*level as usize),
-                        render_inline(text, Format::Gfm)
-                    )
-                }
-                (Format::Html, Block::Paragraph(text)) => {
-                    format!("<p>{}</p>", render_inline(text, Format::Html))
-                }
-                (Format::Html, Block::Heading { level, text }) => {
-                    let id = heading_id(text, &mut ids);
+                Format::Gfm => format!(
+                    "{} {}",
+                    "#".repeat(*level as usize),
+                    render_inline(text, Format::Gfm)
+                ),
+                Format::Html => {
+                    let id = heading_id(text, &mut headings);
                     format!(
                         "<h{level} id=\"{}\">{}</h{level}>",
                         html_escape::encode_double_quoted_attribute(&id),
                         render_inline(text, Format::Html)
                     )
                 }
-                (Format::Wikitext, Block::List { ordered, items }) => items
-                    .iter()
-                    .map(|item| {
-                        format!(
-                            "{} {}",
-                            if *ordered { "#" } else { "*" },
-                            render_inline(item, Format::Wikitext)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                (Format::Gfm, Block::List { ordered, items }) => items
-                    .iter()
-                    .map(|item| {
-                        format!(
-                            "{} {}",
-                            match (*ordered, alternate) {
-                                (false, false) => "-",
-                                (false, true) => "*",
-                                (true, false) => "1.",
-                                (true, true) => "1)",
-                            },
-                            render_inline(item, Format::Gfm)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                (Format::Html, Block::List { ordered, items }) => {
-                    let tag = if *ordered { "ol" } else { "ul" };
-                    let content = items
-                        .iter()
-                        .map(|item| format!("<li>{}</li>", render_inline(item, Format::Html)))
-                        .collect::<String>();
-                    format!("<{tag}>{content}</{tag}>")
-                }
+            },
+            Block::Core(block) => {
+                core::render(block, request.target, alternate.is_some_and(|(_, alt)| alt))
             }
-        })
-        .collect::<Vec<_>>()
-        .join(if request.target == Format::Html {
-            "\n"
+            Block::Table(table) => table.render(request.target)?,
+            Block::Html(html) if request.target == Format::Wikitext => html_to_wiki(html),
+            Block::Html(html) => embedded_html(html, request.context.site_language),
+        };
+        if !rendered.is_empty() {
+            blocks.push(rendered);
+        }
+    }
+    let encoded_metadata = match request.target {
+        Format::Wikitext => metadata::render_wikitext(&page_metadata),
+        Format::Html => metadata::render_html(&page_metadata),
+        Format::Gfm => String::new(),
+    };
+    if !encoded_metadata.is_empty() {
+        if page_metadata.redirect_target.is_some() && request.target == Format::Wikitext {
+            blocks.insert(0, encoded_metadata);
         } else {
-            "\n\n"
+            blocks.push(encoded_metadata);
+        }
+    }
+    diagnostics.sort_by_key(|diagnostic| diagnostic.span.start);
+    if mode == ConversionMode::Strict
+        && diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == DiagnosticKind::ConversionLoss)
+    {
+        return Err(ConversionError {
+            message: "strict conversion would lose document meaning".into(),
+            diagnostics,
         });
+    }
     Ok(ConversionResult {
-        content,
-        metadata: PageMetadata::default(),
-        diagnostics: Vec::new(),
+        content: blocks.join(separator),
+        metadata: page_metadata,
+        diagnostics,
     })
 }
 
-fn flush_paragraph(
-    blocks: &mut Vec<Block>,
-    lines: &mut Vec<&str>,
-    language: &str,
-) -> Result<(), ConversionError> {
-    if !lines.is_empty() {
-        blocks.push(Block::Paragraph(inline::parse_wiki(
-            &lines.join("\n"),
-            language,
-        )?));
-        lines.clear();
+fn original_range(span: Range<usize>, removed: &[Range<usize>]) -> Range<usize> {
+    let mut start = span.start;
+    let mut end = span.end;
+    for removal in removed {
+        if removal.start <= start {
+            start += removal.len();
+        }
+        if removal.start < end {
+            end += removal.len();
+        }
     }
-    Ok(())
+    start..end.max(start)
 }
 
-fn parse_wikitext(input: &str, language: &str) -> Result<Document, ConversionError> {
-    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
-    let mut blocks = Vec::new();
-    let mut lines = Vec::new();
-    let mut blank_lines = 0;
-    for line in normalized.split('\n') {
-        if line.trim().is_empty() {
-            blank_lines += 1;
-            flush_paragraph(&mut blocks, &mut lines, language)?;
-            continue;
-        }
-        if !blocks.is_empty() && blank_lines > 1 {
-            return Err(ConversionError::new(
-                "multiple blank lines between blocks are unsupported",
-            ));
-        }
-        let list_break = blank_lines > 0;
-        blank_lines = 0;
-        if line.starts_with(['*', '#']) {
-            flush_paragraph(&mut blocks, &mut lines, language)?;
-            if line[1..].starts_with(['*', '#', ':', ';']) {
-                return Err(ConversionError::new("nested lists are unsupported"));
-            }
-            let ordered = line.starts_with('#');
-            let item = inline::parse_wiki(line[1..].trim_start_matches([' ', '\t']), language)?;
-            match blocks.last_mut() {
-                Some(Block::List {
-                    ordered: existing,
-                    items,
-                }) if *existing == ordered && !list_break => items.push(item),
-                _ => blocks.push(Block::List {
-                    ordered,
-                    items: vec![item],
-                }),
-            }
-            continue;
-        }
-        let heading_line = line.trim_end();
-        let start = heading_line.bytes().take_while(|&c| c == b'=').count();
-        let end = heading_line
-            .bytes()
-            .rev()
-            .take_while(|&c| c == b'=')
-            .count();
-        let level = if start == heading_line.len() {
-            start.saturating_sub(1).checked_div(2).unwrap_or(0).min(6)
-        } else {
-            start.min(end).min(6)
-        };
-        if level > 0 {
-            flush_paragraph(&mut blocks, &mut lines, language)?;
-            let text = &heading_line[level..heading_line.len() - level];
-            blocks.push(Block::Heading {
-                level: level as u8,
-                text: inline::parse_wiki(text.trim(), language)?,
-            });
-            continue;
-        }
-        if line.starts_with([' ', '\t', '*', '#', ';', ':']) || line.starts_with("----") {
-            return Err(ConversionError::new("unsupported wikitext syntax"));
-        }
-        lines.push(line);
-    }
-    flush_paragraph(&mut blocks, &mut lines, language)?;
-    Ok(Document { blocks })
-}
-
-fn parse_gfm(input: &str) -> Result<Document, ConversionError> {
-    // Comrak implements GFM literal autolinks. Reject raw HTML and link titles
-    // before rendering so sanitization cannot silently discard source content.
-    let mut options = comrak::Options::default();
-    options.extension.autolink = true;
-    options.extension.table = true;
-    options.extension.strikethrough = true;
-    options.extension.tasklist = true;
-    let arena = comrak::Arena::new();
-    let root = comrak::parse_document(&arena, input, &options);
-    for node in root.descendants() {
-        match &node.data.borrow().value {
-            comrak::nodes::NodeValue::HtmlBlock(_) | comrak::nodes::NodeValue::HtmlInline(_) => {
-                return Err(ConversionError::new("raw GFM HTML is unsupported"));
-            }
-            comrak::nodes::NodeValue::Link(link) if !link.title.is_empty() => {
-                return Err(ConversionError::new("GFM link titles are unsupported"));
-            }
-            _ => {}
-        }
-    }
-    let mut output = Vec::new();
-    comrak::format_html(root, &options, &mut output)
-        .map_err(|error| ConversionError::new(format!("failed to render GFM: {error}")))?;
-    let html = String::from_utf8(output)
-        .map_err(|_| ConversionError::new("GFM renderer produced invalid UTF-8"))?;
-    parse_html(&html)
-}
-
-fn parse_html(input: &str) -> Result<Document, ConversionError> {
-    fn normalized(text: &str) -> String {
-        let mut output = String::new();
-        let mut space = false;
-        for c in text.chars() {
-            if matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000C}') {
-                if !space {
-                    output.push(' ');
-                }
-                space = true;
-            } else {
-                output.push(c);
-                space = false;
-            }
-        }
-        output
-    }
-    fn parse_inlines(parent: scraper::ElementRef<'_>) -> Result<Vec<Inline>, ConversionError> {
-        let mut content = Vec::new();
-        for node in parent.children() {
-            match node.value() {
-                Node::Text(value) => inline::text(&mut content, &normalized(value)),
-                Node::Comment(_) => {}
-                Node::Element(anchor) if anchor.name() == "a" => {
-                    let href = anchor
-                        .attr("href")
-                        .ok_or_else(|| ConversionError::new("link has no href"))?;
-                    let mut label = String::new();
-                    for item in node.children() {
-                        match item.value() {
-                            Node::Text(value) => label.push_str(value),
-                            Node::Comment(_) => {}
-                            _ => return Err(ConversionError::new("unsupported link label")),
-                        }
-                    }
-                    content.push(inline::from_href(href, normalized(&label))?);
-                }
-                _ => {
-                    return Err(ConversionError::new(
-                        "unsupported HTML content inside block",
-                    ))
-                }
-            }
-        }
-        if let Some(Inline::Text(first)) = content.first_mut() {
-            *first = first.trim_start_matches(' ').to_string();
-        }
-        if let Some(Inline::Text(last)) = content.last_mut() {
-            *last = last.trim_end_matches(' ').to_string();
-        }
-        Ok(content)
-    }
-    fn children(
-        parent: scraper::ElementRef<'_>,
-        blocks: &mut Vec<Block>,
-    ) -> Result<(), ConversionError> {
-        for child in parent.children() {
-            match child.value() {
-                Node::Text(text) if text.trim().is_empty() => {}
-                Node::Comment(_) => {}
-                Node::Element(element) if element.name() == "section" => {
-                    children(scraper::ElementRef::wrap(child).unwrap(), blocks)?
-                }
-                Node::Element(element) if element.name() == "ul" || element.name() == "ol" => {
-                    let ordered = element.name() == "ol";
-                    if ordered
-                        && element
-                            .attr("start")
-                            .is_some_and(|start| start.trim() != "1")
-                    {
-                        return Err(ConversionError::new("ordered lists must start at 1"));
-                    }
-                    if element.attr("reversed").is_some() {
-                        return Err(ConversionError::new(
-                            "reversed ordered lists are unsupported",
-                        ));
-                    }
-                    let mut items = Vec::new();
-                    for li in child.children() {
-                        match li.value() {
-                            Node::Text(text) if text.trim().is_empty() => {}
-                            Node::Comment(_) => {}
-                            Node::Element(item)
-                                if item.name() == "li" && item.attr("value").is_none() =>
-                            {
-                                let item_ref = scraper::ElementRef::wrap(li).unwrap();
-                                let significant = item_ref.children().filter(|node| !matches!(node.value(), Node::Comment(_)) && !matches!(node.value(), Node::Text(t) if t.trim().is_empty())).collect::<Vec<_>>();
-                                let content = if significant.len() == 1
-                                    && matches!(significant[0].value(), Node::Element(el) if el.name() == "p")
-                                {
-                                    parse_inlines(
-                                        scraper::ElementRef::wrap(significant[0]).unwrap(),
-                                    )?
-                                } else {
-                                    parse_inlines(item_ref)?
-                                };
-                                items.push(content);
-                            }
-                            _ => return Err(ConversionError::new("unsupported HTML list content")),
-                        }
-                    }
-                    if items.is_empty() {
-                        return Err(ConversionError::new("empty lists are unsupported"));
-                    }
-                    blocks.push(Block::List { ordered, items });
-                }
-                Node::Element(element)
-                    if element.name() == "p"
-                        || matches!(element.name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") =>
-                {
-                    let content = parse_inlines(scraper::ElementRef::wrap(child).unwrap())?;
-                    if element.name() == "p" {
-                        if inline::plain(&content).is_empty() {
-                            return Err(ConversionError::new(
-                                "empty HTML paragraphs are unsupported",
-                            ));
-                        }
-                        blocks.push(Block::Paragraph(content));
-                    } else {
-                        blocks.push(Block::Heading {
-                            level: element.name().as_bytes()[1] - b'0',
-                            text: content,
-                        });
-                    }
-                }
-                _ => return Err(ConversionError::new("unsupported HTML content")),
-            }
-        }
-        Ok(())
-    }
-    let fragment = Html::parse_fragment(input);
-    let mut blocks = Vec::new();
-    children(fragment.root_element(), &mut blocks)?;
-    // Wikitext cannot express arbitrary HTML heading IDs. Fail when a same-page
-    // link depends on an ID that would change during conversion.
-    let headings = scraper::Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
-    let anchors = scraper::Selector::parse("a[href]").unwrap();
-    let mut ids = std::collections::HashSet::new();
-    let canonical = blocks.iter().filter_map(|block| match block {
-        Block::Heading { text, .. } => Some(heading_id(text, &mut ids)),
-        _ => None,
-    });
-    let changed: std::collections::HashSet<String> = fragment
-        .select(&headings)
-        .zip(canonical)
-        .filter_map(|(element, canonical)| {
-            element
-                .value()
-                .attr("id")
-                .filter(|id| *id != canonical)
-                .map(str::to_owned)
-        })
-        .collect();
-    for anchor in fragment.select(&anchors) {
-        if let Some(raw) = anchor
-            .value()
-            .attr("href")
-            .and_then(|href| href.strip_prefix('#'))
+fn strip_transclusions(input: &str) -> (String, Vec<Diagnostic>) {
+    let (mut pos, mut output, mut diagnostics) = (0, String::new(), Vec::new());
+    while pos < input.len() {
+        let tail = &input[pos..];
+        let literal = if let Some(comment) = tail.strip_prefix("<!--") {
+            Some(comment.find("-->").map_or(tail.len(), |end| end + 7))
+        } else if tail
+            .get(..8)
+            .is_some_and(|s| s.eq_ignore_ascii_case("<nowiki>"))
         {
-            if changed.contains(&inline::decode_component(raw)?) {
-                return Err(ConversionError::new("same-page link refers to a noncanonical HTML heading ID that wikitext cannot preserve"));
+            Some(
+                tail.to_ascii_lowercase()
+                    .find("</nowiki>")
+                    .map_or(tail.len(), |end| end + 9),
+            )
+        } else if let Some((name, open_end, false)) = html_policy::tag_info(tail) {
+            if name == "pre" {
+                html_policy::raw_close(&tail[open_end..], &name).map(|(_, end)| open_end + end)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(length) = literal {
+            output.push_str(&tail[..length]);
+            pos += length;
+            continue;
+        }
+        if tail.starts_with("{{") {
+            let length = transclusion_end(tail);
+            if let Some(length) = length {
+                diagnostics.push(Diagnostic::loss(
+                    pos..pos + length,
+                    "unsupported wikitext transclusion omitted",
+                ));
+                pos += length;
+                continue;
+            }
+            output.push_str(tail);
+            break;
+        }
+        let character = tail.chars().next().unwrap();
+        output.push(character);
+        pos += character.len_utf8();
+    }
+    (output, diagnostics)
+}
+
+fn transclusion_end(input: &str) -> Option<usize> {
+    let mut levels = Vec::new();
+    let mut pos = 0;
+    while let Some(next) = input[pos..].find(['{', '}']) {
+        pos += next;
+        let tail = &input[pos..];
+        if tail.starts_with("{{") {
+            let width = if tail.starts_with("{{{") && !tail.starts_with("{{{{") {
+                3
+            } else {
+                2
+            };
+            levels.push(width);
+            pos += width;
+        } else if let Some(&width) = levels.last() {
+            if tail
+                .as_bytes()
+                .get(..width)
+                .is_some_and(|part| part.iter().all(|&b| b == b'}'))
+            {
+                levels.pop();
+                pos += width;
+                if levels.is_empty() {
+                    return Some(pos);
+                }
+            } else {
+                pos += 1;
             }
         }
     }
-    Ok(Document { blocks })
+    None
+}
+
+fn parse_wikitext(
+    input: &str,
+    language: &str,
+    source_span: &impl Fn(Range<usize>) -> Range<usize>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Document {
+    let removed_crs: Vec<_> = input
+        .match_indices("\r\n")
+        .map(|(pos, _)| pos..pos + 1)
+        .collect();
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<_> = normalized.split('\n').collect();
+    let location = |part: &str, length| {
+        let start = part.as_ptr() as usize - normalized.as_ptr() as usize;
+        source_span(original_range(start..start + length, &removed_crs))
+    };
+    let mut blocks = Vec::new();
+    let mut pos = 0;
+    while pos < lines.len() {
+        let line = lines[pos];
+        let remainder = &normalized[line.as_ptr() as usize - normalized.as_ptr() as usize..];
+        if let Some((name, end)) = html_policy::wiki_fragment(remainder) {
+            if html_policy::is_block(&name) {
+                let html = &remainder[..end];
+                blocks.push(Block::Html(html.to_owned()));
+                pos += html.bytes().filter(|&b| b == b'\n').count();
+                let rest = remainder[end..]
+                    .split('\n')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches([' ', '\t']);
+                if rest.is_empty() {
+                    pos += 1;
+                } else {
+                    lines[pos] = rest;
+                }
+                continue;
+            }
+        }
+        if line.starts_with("{|") {
+            let mut depth = 0;
+            let length = lines[pos..]
+                .iter()
+                .position(|line| {
+                    let line = line.trim_start();
+                    if line.starts_with("{|") {
+                        depth += 1;
+                    } else if line.starts_with("|}") {
+                        depth -= 1;
+                        return depth == 0;
+                    }
+                    false
+                })
+                .map_or(lines.len() - pos, |end| end + 1);
+            let table_source = lines[pos..pos + length].join("\n");
+            let span = location(line, table_source.len());
+            match table::Table::parse_wiki(&table_source, language) {
+                Ok(table) => {
+                    diagnostics.extend(table.wiki_import_losses().iter().map(|diagnostic| {
+                        Diagnostic::new(diagnostic.kind, span.clone(), &diagnostic.message)
+                    }));
+                    blocks.push(Block::Table(table));
+                }
+                Err(error) => {
+                    diagnostics.push(Diagnostic::loss(span, format!("table omitted: {error}")))
+                }
+            }
+            pos += length;
+            continue;
+        }
+        match core::parse_wiki(&lines[pos..], language) {
+            Ok(Some((block, length))) => {
+                blocks.push(Block::Core(block));
+                pos += length;
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                diagnostics.push(Diagnostic::loss(
+                    location(line, line.len()),
+                    error.to_string(),
+                ));
+                blocks.push(Block::Paragraph(vec![Inline::Text(line.to_owned())]));
+                pos += 1;
+                continue;
+            }
+        }
+        if line.trim_ascii().is_empty() {
+            pos += 1;
+            continue;
+        }
+        if let Some((level, text)) = heading(line) {
+            blocks.push(Block::Heading {
+                level,
+                text: parse_wiki_inline(text, language, location(text, text.len()), diagnostics),
+            });
+            pos += 1;
+            continue;
+        }
+        let end = lines[pos + 1..]
+            .iter()
+            .position(|line| {
+                line.trim_ascii().is_empty()
+                    || heading(line).is_some()
+                    || line.starts_with(['*', '#', ':', ';', ' '])
+                    || line.starts_with("----")
+                    || line.starts_with("{|")
+                    || html_policy::wiki_fragment(line)
+                        .is_some_and(|(name, _)| html_policy::is_block(&name))
+            })
+            .map(|offset| pos + 1 + offset)
+            .unwrap_or(lines.len());
+        let paragraph = lines[pos..end].join("\n");
+        blocks.push(Block::Paragraph(parse_wiki_inline(
+            &paragraph,
+            language,
+            location(line, paragraph.len()),
+            diagnostics,
+        )));
+        pos = end;
+    }
+    Document { blocks }
+}
+
+fn parse_wiki_inline(
+    input: &str,
+    language: &str,
+    location: Range<usize>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Inline> {
+    match inline::parse_wiki(input, language) {
+        Ok(inlines) => inlines,
+        Err(error) => {
+            diagnostics.push(Diagnostic::loss(location, error.to_string()));
+            vec![Inline::Text(input.to_owned())]
+        }
+    }
+}
+
+fn locate(input: &str, fragment: &str) -> Range<usize> {
+    input
+        .find(fragment)
+        .map_or(0..input.len(), |start| start..start + fragment.len())
+}
+
+fn heading(line: &str) -> Option<(u8, &str)> {
+    let line = line.trim_end();
+    let start = line.bytes().take_while(|&c| c == b'=').count();
+    let end = line.bytes().rev().take_while(|&c| c == b'=').count();
+    let level = if start == line.len() {
+        start.saturating_sub(1) / 2
+    } else {
+        start.min(end)
+    }
+    .min(6);
+    (level > 0).then(|| (level as u8, line[level..line.len() - level].trim()))
 }
 
 fn render_inline(content: &[Inline], format: Format) -> String {
@@ -503,6 +578,23 @@ fn render_inline(content: &[Inline], format: Format) -> String {
     let mut previous_wikilink = false;
     for part in content {
         match part {
+            Inline::Html(html) => match format {
+                Format::Wikitext => output.push_str(&html_to_wiki(html)),
+                _ => output.push_str(html),
+            },
+            Inline::Emphasis { strong, children } => {
+                let (open, close) = match (format, strong) {
+                    (Format::Html, true) => ("<b>", "</b>"),
+                    (Format::Html, false) => ("<i>", "</i>"),
+                    (Format::Wikitext, true) => ("'''", "'''"),
+                    (Format::Wikitext, false) => ("''", "''"),
+                    (Format::Gfm, true) => ("**", "**"),
+                    (Format::Gfm, false) => ("*", "*"),
+                };
+                output.push_str(open);
+                output.push_str(&render_inline(children, format));
+                output.push_str(close);
+            }
             Inline::Text(text) => match format {
                 Format::Wikitext => {
                     let mut remainder = text.as_str();
@@ -531,17 +623,17 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                     output.push_str(&format!(
                         "[[{}|{}]]",
                         target.replace('&', "&amp;"),
-                        escape_wikitext(label)
+                        render_inline(label, format)
                     ));
                 }
                 Format::Wikitext => output.push_str(&format!(
                     "[{} {}]",
-                    href.replace('&', "&amp;"),
-                    escape_wikitext(label)
+                    html_policy::escape_wiki_attribute_value(href),
+                    render_inline(label, format)
                 )),
                 Format::Gfm => output.push_str(&format!(
                     "[{}](<{}>)",
-                    escape_gfm(label),
+                    render_inline(label, format),
                     href.replace('&', "&amp;")
                 )),
                 Format::Html => output.push_str(&format!(
@@ -552,7 +644,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                         "mw:ExtLink"
                     },
                     html_escape::encode_double_quoted_attribute(href),
-                    html_escape::encode_text(label)
+                    render_inline(label, format)
                 )),
             },
         }

@@ -20,6 +20,10 @@ The tests compare normalized HTML against the expected DOM in the release's pars
 | Named and bare external links | `vendor/wikimedia/parsoid/tests/parser/extLinks.txt` | `External links: specified text`, `External links: non-bracketed`, `External links: Free with trailing punctuation` |
 | Ordered and unordered lists | `tests/parser/parserTests.txt` | `Simple list`, `Common list`, `Numbered list` |
 
+The `core`, `tables`, and `metadata` integration tests exercise additional pinned cases alongside API and CLI round trips. The core cases load nested and definition lists and horizontal rules from `tests/parser/parserTests.txt`, and compare apostrophe runs and preformatted text with `vendor/wikimedia/parsoid/tests/parser/quotes.txt` and `indentPre.txt`. Table cases cover `Simple table`, `Table rowspan`, and `Nested table` from `tests/parser/tables.txt`. Metadata cases cover category sort keys, redirects with and without the optional colon, and plain and styled display titles.
+
+HTML policy tests cover safe attributes and URLs, prohibited elements and attributes, and malformed markup through general HTML, GFM, and embedded wikitext HTML. Imported HTML is repaired as a fragment. Parsoid's wikitext literal-tag rules preserve unsupported tags as visible text where applicable.
+
 Run the mixed-document workflow with PHP 8.3 or newer and the DOM, Intl, and Mbstring extensions enabled. The test uses `php` from `PATH` by default. Set `RWIKITEXT_PHP` to use a specific executable. The PHP renderer uses the bundled Parsoid and its local test site configuration.
 
 ```sh
