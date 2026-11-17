@@ -26,6 +26,8 @@ The result exposes category names and their corresponding sort keys, redirects, 
 
 See [the compatibility baseline](docs/compatibility.md) for the pinned upstream tests.
 
+Build the versioned C ABI and run the C, Python, PHP, Java, Kotlin/Native, and Node.js examples using the [native binding guide](docs/native-bindings.md).
+
 ## Project Goals
 
 ### Document Conversion and Fidelity
@@ -54,7 +56,7 @@ See [the compatibility baseline](docs/compatibility.md) for the pinned upstream 
 
 ## Current Status
 
-rWikiText has a Rust conversion API and test CLI with caller-supplied wiki data. The first-release roadmap tracks further MediaWiki compatibility verification and native language bindings.
+rWikiText has a Rust conversion API, test CLI, and native bindings with caller-supplied wiki data. The first-release roadmap tracks further MediaWiki compatibility and Linux runtime verification.
 
 ### Completed
 

@@ -1,5 +1,6 @@
 mod core;
 mod expansion;
+mod ffi;
 mod functions;
 mod html;
 mod html_policy;
