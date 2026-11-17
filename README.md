@@ -93,4 +93,4 @@ For contributions, follow the repository's issue, branch, and pull request workf
 
 ## License
 
-The project license is unconfirmed. The repository has no license file or Cargo license declaration.
+rWikiText is licensed under the [MIT License](LICENSE).
