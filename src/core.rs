@@ -87,6 +87,7 @@ pub(crate) fn parse_wiki(
 
 fn split_definition(content: &str) -> Option<(&str, &str)> {
     let mut depth = 0usize;
+    let mut quote = false;
     let mut index = 0;
     while index < content.len() {
         let rest = &content[index..];
@@ -96,7 +97,40 @@ fn split_definition(content: &str) -> Option<(&str, &str)> {
         } else if rest.starts_with("]]") || rest.starts_with("}}") {
             depth = depth.saturating_sub(1);
             index += 2;
-        } else if rest.starts_with(':') && depth == 0 {
+        } else if depth == 0 && rest.starts_with("'''") {
+            quote = !quote;
+            index += 3;
+        } else if depth == 0
+            && rest.starts_with('[')
+            && crate::html_policy::PROTOCOLS.iter().any(|&p| {
+                rest[1..]
+                    .get(..p.len())
+                    .is_some_and(|s| s.eq_ignore_ascii_case(p))
+            })
+        {
+            index += rest.find(']').map_or(rest.len(), |end| end + 1);
+        } else if depth == 0
+            && crate::html_policy::PROTOCOLS.iter().any(|&p| {
+                p != "//"
+                    && rest
+                        .get(..p.len())
+                        .is_some_and(|s| s.eq_ignore_ascii_case(p))
+            })
+            && content[..index]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+        {
+            index += rest.find(char::is_whitespace).unwrap_or(rest.len());
+        } else if depth == 0 && rest.starts_with('<') {
+            if let Some(len) = crate::html_policy::element_len(rest)
+                .or_else(|| crate::html_policy::tag_info(rest).map(|(_, len, _)| len))
+            {
+                index += len;
+            } else {
+                index += 1;
+            }
+        } else if rest.starts_with(':') && depth == 0 && (!quote || !rest[1..].contains(':')) {
             return Some((&content[..index], &content[index + 1..]));
         } else {
             index += rest.chars().next().unwrap().len_utf8();

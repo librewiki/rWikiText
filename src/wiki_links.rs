@@ -393,7 +393,7 @@ fn scan_inner(
                             .bytes()
                             .take_while(u8::is_ascii_lowercase)
                             .count();
-                        let label = options.first().copied().unwrap_or(&raw_title);
+                        let label = options.first().copied().unwrap_or(target_title);
                         if let Some(mut label) = html_label(label, language) {
                             label.push_str(&txt(&rest[end + 2..end + 2 + trail]));
                             edits.push(Edit { range: pos..span.end+trail, html: format!("<a rel=\"mw:WikiLink\" href=\"{}\" title=\"{}\" class=\"new\">{label}</a>", attr(&red), attr(&lookup_title)), loss: None });

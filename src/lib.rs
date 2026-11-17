@@ -349,9 +349,14 @@ fn prepare_wikitext(
         options.expansion_limits,
     )?;
     let expanded_span = |span| expanded.original_span(span);
-    let metadata = metadata::extract_wikitext(&expanded.text, request.context)?;
+    let metadata = metadata::extract_wikitext(&expanded.text, request.input, request.context)?;
     let body_span = |span| expanded_span(original_range(span, &metadata.ranges));
-    let sanitized = html_policy::sanitize(&metadata.body, true);
+    let invocation_spans: Vec<_> = expanded
+        .invocations
+        .iter()
+        .map(|call| range_after_removals(call.expanded_range.clone(), &metadata.ranges))
+        .collect();
+    let sanitized = html_policy::sanitize_wikitext(&metadata.body, &invocation_spans);
     let sanitized_span = |span| body_span(sanitized.original_span(span));
     let project = |span| sanitized.output_span(range_after_removals(span, &metadata.ranges));
 
@@ -436,7 +441,7 @@ fn prepare_wikitext(
                 ));
                 continue;
             }
-            let block = block && aligned;
+            let block = (block || fragment.is_empty()) && aligned;
             let (mw, parsoid) = transclusion::metadata(call);
             markup.group(span, source, block, mw, parsoid);
         }
@@ -693,6 +698,10 @@ fn parse_wikitext(
             pos += length;
             continue;
         }
+        if line.trim_ascii().is_empty() {
+            pos += 1;
+            continue;
+        }
         match core::parse_wiki(&lines[pos..], language) {
             Ok(Some((block, length))) => {
                 blocks.push(Block::Core(block));
@@ -709,10 +718,6 @@ fn parse_wikitext(
                 pos += 1;
                 continue;
             }
-        }
-        if line.trim_ascii().is_empty() {
-            pos += 1;
-            continue;
         }
         if let Some((level, text)) = heading(line) {
             blocks.push(Block::Heading {

@@ -392,8 +392,13 @@ fn tag(input: &str) -> Option<Tag<'_>> {
             });
         }
         let attr_start = i;
+        if input_bytes
+            .get(attr_start)
+            .is_none_or(|b| matches!(b, b'/' | b'<' | b'='))
+        {
+            return None;
+        }
         i += 1;
-        input_bytes.get(attr_start)?;
         while input_bytes
             .get(i)
             .is_some_and(|b| !b.is_ascii_whitespace() && !b"=/><".contains(b))
@@ -605,6 +610,14 @@ impl Sanitized {
 }
 
 pub(crate) fn sanitize(input: &str, wikitext: bool) -> Sanitized {
+    sanitize_inner(input, wikitext, &[])
+}
+
+pub(crate) fn sanitize_wikitext(input: &str, invocations: &[Range<usize>]) -> Sanitized {
+    sanitize_inner(input, true, invocations)
+}
+
+fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>]) -> Sanitized {
     let mut output = String::new();
     let mut diagnostics = Vec::new();
     let mut replacements = Vec::new();
@@ -625,9 +638,12 @@ pub(crate) fn sanitize(input: &str, wikitext: bool) -> Sanitized {
                 .filter(|prefix| prefix.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r')))
             {
                 if let Some(end) = input[pos..].find('\n') {
+                    let line_start = pos - prefix.len();
                     let mut rest = &input[pos..pos + end];
-                    let mut complete = true;
-                    while !rest.is_empty() {
+                    let mut complete = !invocations
+                        .iter()
+                        .any(|span| line_start <= span.start && span.end <= pos + end);
+                    while complete && !rest.is_empty() {
                         rest = rest.trim_start_matches([' ', '\t', '\r']);
                         if rest.is_empty() {
                             break;
@@ -690,21 +706,41 @@ fn sanitize_token(
     if let Some(comment) = rest.strip_prefix("<!--") {
         return comment.find("-->").map_or(rest.len(), |n| n + 7);
     }
-    if wikitext
-        && rest
-            .get(..8)
-            .is_some_and(|s| s.eq_ignore_ascii_case("<nowiki>"))
-    {
-        let tail = &rest[8..];
-        let end = tail
-            .to_ascii_lowercase()
-            .find("</nowiki>")
-            .unwrap_or(tail.len());
-        let literal = &tail[..end];
-        for character in literal.chars() {
-            output.push_str(&format!("&#{};", character as u32));
+    if wikitext {
+        if let Some(token) = tag(rest).filter(|token| token.name == "nowiki" && !token.closing) {
+            if token.self_closing {
+                if output.ends_with('\'') && rest[token.end..].starts_with('\'') {
+                    if !output.ends_with("''") {
+                        output.pop();
+                        output.push_str("&#39;");
+                        return token.end;
+                    }
+                }
+                let at_line_start =
+                    output.is_empty() || output.as_bytes().last() == Some(&b'\n');
+                if !(at_line_start
+                    && rest[token.end..]
+                        .trim_start_matches([' ', '\t'])
+                        .starts_with('<'))
+                {
+                    output.push_str("<nowiki/>");
+                }
+                return token.end;
+            }
+            let tail = &rest[token.end..];
+            let (literal_end, total_len) = match raw_close(tail, "nowiki") {
+                Some((close_start, close_end)) => (close_start, token.end + close_end),
+                None => (tail.len(), rest.len()),
+            };
+            let decoded = html_escape::decode_html_entities(&tail[..literal_end]);
+            if !decoded.is_empty() {
+                output.push_str("<nowiki/>");
+            }
+            for character in decoded.chars() {
+                output.push_str(&format!("&#{};", character as u32));
+            }
+            return total_len;
         }
-        return (8 + end + 9).min(rest.len());
     }
     let Some(token) = tag(rest) else {
         output.push_str(if wikitext { "&lt;" } else { "<" });

@@ -355,10 +355,25 @@ fn pinned_magic_word_cases() {
         "CURRENTYEAR",
         "CURRENTTIMESTAMP",
         "FULLPAGENAME",
+        "FULLPAGENAMEE",
         "PAGENAME",
+        "PAGENAMEE",
         "SUBPAGENAME",
+        "SUBPAGENAMEE",
         "BASEPAGENAME",
+        "BASEPAGENAMEE",
         "ROOTPAGENAME",
+        "ROOTPAGENAMEE",
+        "NAMESPACEE",
+        "NAMESPACENUMBER",
+        "TALKSPACE",
+        "TALKSPACEE",
+        "SUBJECTSPACE",
+        "SUBJECTSPACEE",
+        "TALKPAGENAME",
+        "TALKPAGENAMEE",
+        "SUBJECTPAGENAME",
+        "SUBJECTPAGENAMEE",
     ] {
         let title = format!("!! test\nMagic Word: {{{{{name}}}}}\n");
         let case = source
@@ -641,4 +656,52 @@ fn local_cli_repeats_context_dependent_functions() {
     assert!(!error.status.success());
     assert!(error.stdout.is_empty());
     assert!(String::from_utf8_lossy(&error.stderr).contains("page unavailable"));
+}
+
+#[test]
+fn url_encoded_and_namespace_context_variables_and_local_utc_time() {
+    let output = run(
+        "{{PAGENAMEE}}; {{FULLPAGENAMEE}}; {{SUBPAGENAMEE}}; {{BASEPAGENAMEE}}; {{ROOTPAGENAMEE}}; \
+         {{NAMESPACEE}}; {{NAMESPACENUMBER}}; {{TALKSPACE}}; {{TALKSPACEE}}; \
+         {{SUBJECTSPACE}}; {{SUBJECTSPACEE}}; {{ARTICLESPACE}}; {{ARTICLESPACEE}}; \
+         {{TALKPAGENAME}}; {{TALKPAGENAMEE}}; {{SUBJECTPAGENAME}}; {{SUBJECTPAGENAMEE}}; \
+         {{ARTICLEPAGENAME}}; {{ARTICLEPAGENAMEE}}; \
+         {{LOCALYEAR}}-{{LOCALMONTH}}-{{LOCALMONTH1}}-{{LOCALDAY}}-{{LOCALDAY2}} \
+         {{LOCALTIME}} {{LOCALHOUR}} {{LOCALDOW}} {{LOCALWEEK}} \
+         {{LOCALDAYNAME}} {{LOCALMONTHABBREV}} {{LOCALMONTHNAME}} {{LOCALMONTHNAMEGEN}} {{LOCALTIMESTAMP}}",
+    )
+    .unwrap();
+    assert_eq!(
+        output.trim(),
+        "Example/Sub; User:Example/Sub; Sub; Example; Example; \
+         User; 2; User talk; User_talk; \
+         User; User; User; User; \
+         User talk:Example/Sub; User_talk:Example/Sub; User:Example/Sub; User:Example/Sub; \
+         User:Example/Sub; User:Example/Sub; \
+         2024-02-2-3-03 04:05 04 6 5 Saturday Feb February February 20240203040506"
+    );
+}
+
+#[test]
+fn core_ns_urlencode_anchorencode_and_tag_functions() {
+    let output = run(
+        "{{ns:1}}; {{ns:01}}; {{ns:0}}; {{ns:00}}; {{ns:-1}}; {{ns:uSeR tAlK}}; {{ns:Image}}; {{nse:User talk}}; \
+         {{urlencode:hi world?!}}; {{urlencode:hi world?!|WIKI}}; {{urlencode:hi world?!|PATH}}; {{urlencode:hi world?!|QUERY}}; \
+         {{urlencode:x<nowiki/>y}}; {{urlencode:x<pre id=\"one\">two</pre>y}}; \
+         {{anchorencode:foo bar©#%n}}; {{anchorencode: __pretty__please__}}; {{anchorencode: [[hello|world]] [[hi]]}}; \
+         {{anchorencode: _ +:.3A%3A _ &&amp;]] x}}; {{anchorencode:x<nowiki/>y}}; \
+         {{lc:x<nowiki/>y}}; {{uc:x<nowiki/>y}}; \
+         {{#tag:does-not-exist|<nowiki>content</nowiki>|name=a<nowiki>b</nowiki>c}}",
+    )
+    .unwrap();
+    assert_eq!(
+        output.trim(),
+        "Talk; Talk; ; ; Special; User talk; File; User_talk; \
+         hi+world%3F%21; hi_world%3F!; hi%20world%3F%21; hi+world%3F%21; \
+         xy; xy; \
+         foo_bar©#%n; pretty_please; world_hi; \
+         +:.3A%253A_&&]]_x; xy; \
+         xy; XY; \
+         <does-not-exist name=\"ac\">content</does-not-exist>"
+    );
 }

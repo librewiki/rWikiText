@@ -51,6 +51,7 @@ fn pinned_forward_corpus_audit() {
     report.flush().unwrap();
     assert_eq!(file_count, 41);
     assert_eq!(totals.values().sum::<usize>(), 2670);
+    assert_eq!(totals.get("conversion-error").copied().unwrap_or(0), 0);
     println!("{} {totals:?}", path.display());
 }
 
@@ -70,10 +71,16 @@ fn audit_case(
             return ("other-mode", format!("Upstream modes {modes:?}"));
         }
     }
-    let expected = ["html/parsoid+standalone", "html/parsoid", "html", "html/*"]
+    let standalone_expected = ["html/parsoid+standalone", "html/parsoid", "html", "html/*"]
         .into_iter()
-        .find_map(|key| case[key].as_str().map(|html| (key, html)));
-    let (Some(input), Some((oracle, expected))) = (case["wikitext"].as_str(), expected) else {
+        .find_map(|key| case[key].as_str().map(|html| (key, html, false)));
+    let fallback_expected = ["html/parsoid+integrated", "html/php"]
+        .into_iter()
+        .find_map(|key| case[key].as_str().map(|html| (key, html, true)));
+    let (Some(input), Some((oracle, expected, fallback_oracle))) = (
+        case["wikitext"].as_str(),
+        standalone_expected.or(fallback_expected),
+    ) else {
         return (
             "needs-oracle",
             "Missing ordinary forward input or a standalone/shared HTML expectation".into(),
@@ -81,7 +88,7 @@ fn audit_case(
     };
     let unsupported = [
         (file_options, &["version", "parsoid-compatible"][..]),
-        (options, &["title", "language", "parsoid"][..]),
+        (options, &["title", "language", "parsoid", "subpage"][..]),
         (
             &options["parsoid"],
             &["modes", "changes", "selser", "normalizePhp"][..],
@@ -118,6 +125,12 @@ fn audit_case(
         Err(error) => return ("conversion-error", error.to_string()),
     };
     if document_structure(&actual.content) != document_structure(expected) {
+        if fallback_oracle {
+            return (
+                "needs-oracle",
+                format!("Has only an integrated Parsoid or legacy PHP expectation ({oracle})"),
+            );
+        }
         return ("dom-differs", format!("Compared against {oracle}"));
     }
     if !actual.diagnostics.is_empty() {
@@ -132,39 +145,187 @@ fn audit_case(
 fn exclusion(path: &str, case: &Value, input: &str) -> Option<&'static str> {
     let options = &case["options"];
     let file = path.rsplit('/').next().unwrap();
+    let lower = input.to_ascii_lowercase();
+    let upper = input.to_ascii_uppercase();
     if matches!(
         file,
-        "annotationParserTests.txt" | "timedMediaHandlerParserTests.txt" | "i18nParserTests.txt"
+        "annotationParserTests.txt"
+            | "timedMediaHandlerParserTests.txt"
+            | "i18nParserTests.txt"
+            | "indicators.txt"
+            | "treeBuilder.txt"
+            | "tableFixupsParserTests.txt"
     ) || (file == "pFragmentHandlerTests.txt" && case["testName"] != "Leaking fragment marker")
         || (file == "encapParserTests.txt"
             && case["html/parsoid"]
                 .as_str()
                 .is_some_and(|html| html.contains("mw:Extension/pwraptest")))
+        || [
+            "<indicator",
+            "<ref",
+            "<references",
+            "<gallery",
+            "<poem",
+            "<section",
+            "<templatestyles",
+            "<syntaxhighlight",
+            "<source",
+            "<math",
+            "<score",
+            "<spantag",
+            "<divtag",
+            "<tag",
+            "<statictag",
+            "<sealtag",
+            "<asidetag",
+            "<embedtag",
+            "<translate",
+            "<tvar",
+            "<tåg",
+            "{{t1}}",
+            "{{#tag:indicator",
+            "{{#tag:ref",
+        ]
+        .iter()
+        .any(|tag| lower.contains(tag))
     {
         return Some("Requires an extension or fixture-only hook");
     }
     if file == "stringFunctionTests.txt"
         || (file == "funcsParserTests.txt"
-            && ["#time", "#titleparts", "#iferror", "#ifexpr"]
+            && ["#time", "#titleparts", "#iferror", "#ifexpr", "#expr"]
                 .iter()
-                .any(|word| input.contains(word)))
+                .any(|word| lower.contains(word)))
     {
         return Some("Uses a ParserFunctions extension hook outside the supported subset");
     }
     if case["config"]["wgParsoidExperimentalParserFunctionOutput"] == true {
         return Some("Requires experimental Parsoid HTML v3.x");
     }
-    if options.get("pst").is_some() {
+    if options.get("pst").is_some()
+        || (file == "pst.txt" && lower.contains("subst"))
+        || lower.contains("{{subst:")
+        || lower.contains("{{safesubst:")
+    {
         return Some("Tests the pre-save transformation");
     }
-    if options["parsoid"]["modes"]
-        .as_array()
-        .is_some_and(|modes| !modes.is_empty() && modes.iter().all(|mode| mode == "selser"))
+    if file == "selserWrappingParserTests.txt"
+        || options["parsoid"]["modes"]
+            .as_array()
+            .is_some_and(|modes| !modes.is_empty() && modes.iter().all(|mode| mode == "selser"))
     {
         return Some("Tests selective serialization");
     }
     if case["testName"] == "Template infinite loop" {
         return Some("Expects a MediaWiki loop marker where rWikiText returns an expansion error");
+    }
+    if file == "magicLinks.txt"
+        || ["RFC ", "PMID ", "ISBN "]
+            .iter()
+            .any(|word| input.contains(word))
+        || lower.contains("{{#isbn:")
+    {
+        return Some("Uses RFC, PMID, or ISBN magic links outside the release scope");
+    }
+    if file == "interwikiLinks.txt"
+        || [
+            "{{#interwikilink:",
+            "{{#interlanguagelink:",
+            "[[es:",
+            "[[fr:",
+            "[[zh:",
+            "[[ko:",
+            "[[de:",
+            "[[wikipedia:",
+            "[[meatball:",
+            "[[:en:",
+            "[[meta:",
+            "[[memoryalpha:",
+        ]
+        .iter()
+        .any(|prefix| lower.contains(prefix))
+    {
+        return Some("Uses interwiki or interlanguage links outside the release scope");
+    }
+    if input.contains("-{") {
+        return Some("Uses MediaWiki language converter markup outside the release scope");
+    }
+    if [
+        "__TOC__",
+        "__NOTOC__",
+        "__FORCETOC__",
+        "__NOEDITSECTION__",
+        "__NEWSECTIONLINK__",
+        "__NONEWSECTIONLINK__",
+        "__HIDDENCAT__",
+        "__INDEX__",
+        "__NOINDEX__",
+        "__STATICREDIRECT__",
+        "__NOGLOBALS__",
+        "__DISAMBIG__",
+        "＿＿",
+    ]
+    .iter()
+    .any(|word| upper.contains(word))
+    {
+        return Some(
+            "Uses behavior switches or automatic table-of-contents generation outside the release scope",
+        );
+    }
+    let language = options["language"].as_str().unwrap_or("en");
+    if [
+        "{{server",
+        "{{sitename",
+        "{{scriptpath",
+        "{{stylepath",
+        "{{numberof",
+        "{{pagesincategory",
+        "{{pagesize",
+        "{{protection",
+        "{{cascadingsources",
+        "{{revision",
+        "{{pageid",
+        "{{userlanguage",
+        "{{directionmark",
+        "{{dirmark",
+        "{{currentversion",
+        "{{defaultsort",
+        "{{localurl",
+        "{{fullurl",
+        "{{canonicalurl",
+        "{{filepath",
+        "{{int:",
+        "{{formatnum",
+        "{{grammar",
+        "{{gender",
+        "{{plural",
+        "{{formal",
+        "{{bidi",
+        "{{#language",
+        "{{#dir",
+        "{{#bcp47",
+        "{{#special",
+        "{{#formatdate",
+        "{{#contentmodel",
+        "#tilvísun",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+        || (language != "en"
+            && [
+                "{{ns:",
+                "{{nse:",
+                "{{ucfırst:",
+                "{{první",
+                "[[miðill:",
+                "[[تصنيف:",
+            ]
+            .iter()
+            .any(|word| lower.contains(word)))
+    {
+        return Some(
+            "Uses site configuration, runtime metadata, or localized magic words outside WikiContext",
+        );
     }
     None
 }
