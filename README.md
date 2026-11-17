@@ -1,19 +1,20 @@
 # rWikiText
 
-rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It currently supports plain paragraphs, headings at levels one through six, basic wiki and HTTP(S) links, and flat ordered and unordered lists. Wikitext paragraphs use one blank line as a separator, and ordered lists start at one. Wiki links use Parsoid-style relative destinations such as `./Main_Page` in both HTML and GFM. Same-page links use fragments such as `#Local_section`.
+rWikiText converts MediaWiki wikitext to and from GitHub Flavored Markdown and HTML. It supports paragraphs, headings, links, emphasis, preformatted text, horizontal rules, nested and definition lists, and core tables. GFM output uses native tables where possible and HTML for structures such as merged cells. Wiki links use Parsoid-style destinations such as `./Main_Page` and `#Local_section`.
 
 ```sh
 cargo run -- wikitext html input.wiki
 cargo run -- html wikitext - < input.html
+cargo run -- wikitext gfm input.wiki --strict
 ```
 
 Use `wikitext`, `gfm`, or `html` as the source and target, with wikitext on one side of each conversion. The CLI reads standard input when the path is omitted or is `-`. It writes converted content to standard output and diagnostics to standard error. Set the wiki context with `--page-title`, `--site-language`, and `--reference-time`.
 
-The `rwikitext::convert` Rust function accepts a `ConversionRequest` containing the source, target, input, and wiki context. The result includes the converted content, page metadata, and diagnostics.
+The `rwikitext::convert` Rust function accepts a `ConversionRequest` containing the source, target, input, and wiki context. It returns best-effort content, page metadata, and diagnostics with half-open byte ranges in the input. Pass `ConversionMode::Strict` to `convert_with_mode`, or use `--strict` in the CLI, to fail when conversion would lose document meaning. HTML removals that leave document meaning intact are still reported.
+
+The result exposes category names and their corresponding sort keys, redirects, and display titles. Wikitext and Parsoid HTML can carry this metadata in the document. GFM returns it separately and reports what would be lost if only the GFM body were saved.
 
 See [the compatibility baseline](docs/compatibility.md) for the pinned upstream tests.
-=======
-rWikiText is a Rust parser and document conversion library for MediaWiki wikitext. It converts documents between **wikitext**, **GitHub Flavored Markdown (GFM)**, and **HTML** while preserving [document meaning](GLOSSARY.md).
 
 ## Project Goals
 
@@ -43,7 +44,7 @@ rWikiText is a Rust parser and document conversion library for MediaWiki wikitex
 
 ## Current Status
 
-rWikiText is currently in the **specification and initial implementation kickoff phase**. No Rust crate, CLI binary, or language binding code has been merged to `main` yet.
+rWikiText has a Rust conversion API and test CLI. The first-release roadmap tracks additional MediaWiki syntax, wiki data callbacks, and native language bindings.
 
 ### Completed
 

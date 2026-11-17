@@ -276,19 +276,21 @@ fn same_page_link_resolves_to_a_heading_with_repeated_underscores() {
 }
 
 #[test]
-fn html_import_reports_a_same_page_link_to_an_unrepresentable_heading_id() {
+fn html_import_preserves_a_same_page_link_to_a_custom_heading_id() {
     let input = "<h2 id=\"legacy\">Heading</h2><p><a href=\"#legacy\">Jump</a></p>";
-    let result = convert(ConversionRequest {
-        source: Format::Html,
-        target: Format::Wikitext,
-        input,
-        context: &CONTEXT,
-    });
-    assert!(result.unwrap_err().to_string().contains("heading ID"));
-    let output = cli_output(Format::Html, Format::Wikitext, input);
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("heading ID"));
+    for convert in [api, cli] {
+        let wiki = convert(Format::Html, Format::Wikitext, input);
+        let html = convert(Format::Wikitext, Format::Html, &wiki);
+        let document = Html::parse_fragment(&html);
+        for selector in ["h2[id='legacy']", "a[href='#legacy']"] {
+            assert_eq!(
+                document
+                    .select(&scraper::Selector::parse(selector).unwrap())
+                    .count(),
+                1
+            );
+        }
+    }
 }
 
 #[test]
@@ -385,11 +387,249 @@ fn complete_document_cli_file_stdin_and_output_streams() {
         let stdin = output_with_stdin(cli_command(source, target).arg("-"), content);
         assert_eq!(stdout(file), stdout(stdin));
     }
+}
 
-    let output = cli_output(Wikitext, Html, "{{Unsupported template}}");
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported wikitext syntax"));
+#[test]
+fn api_and_cli_report_located_conversion_loss_and_support_strict_mode() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    use Format::{Html, Wikitext};
+
+    let input = "앞 {{Unsupported|{{Nested}}}} after";
+    let request = |input| ConversionRequest {
+        source: Wikitext,
+        target: Html,
+        input,
+        context: &CONTEXT,
+    };
+    let best = convert(request(input)).unwrap();
+    assert_eq!(best.content, "<p>앞  after</p>");
+    let [loss] = best.diagnostics.as_slice() else {
+        panic!("expected one loss")
+    };
+    assert_eq!(loss.kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(&input[loss.span.clone()], "{{Unsupported|{{Nested}}}}");
+    assert!(loss.message.contains("transclusion"));
+    let error = convert_with_mode(request(input), ConversionMode::Strict).unwrap_err();
+    assert_eq!(error.diagnostics(), best.diagnostics);
+    assert!(convert_with_mode(request("앞 after"), ConversionMode::Strict).is_ok());
+
+    let best = cli_output(Wikitext, Html, input);
+    assert!(best.status.success());
+    assert_eq!(String::from_utf8_lossy(&best.stdout), "<p>앞  after</p>");
+    assert!(String::from_utf8_lossy(&best.stderr).contains("transclusion"));
+    let strict = output_with_stdin(cli_command(Wikitext, Html).arg("--strict"), input);
+    assert!(!strict.status.success());
+    assert!(strict.stdout.is_empty());
+    assert_eq!(strict.stderr, best.stderr);
+    let okay = output_with_stdin(cli_command(Wikitext, Html).arg("--strict"), "앞 after");
+    assert_eq!(stdout(okay), "<p>앞 after</p>");
+}
+
+#[test]
+fn html_policy_recovers_malformed_markup_and_reports_meaning_bearing_removals() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    use Format::{Gfm, Html, Wikitext};
+
+    let input = "<div class='panel'><p>Visit <a href='https://example.org'>safe</a>, <a href='jav&#x61;script:alert(1)'>unsafe</a><p><span lang=fr onclick='bad()'>salut</span><script>alert(1)</script></div>";
+    for source in [Gfm, Html] {
+        let request = ConversionRequest {
+            source,
+            target: Wikitext,
+            input,
+            context: &CONTEXT,
+        };
+        let result = convert(request).unwrap();
+        assert_eq!(result.diagnostics.len(), 3, "{:?}", result.diagnostics);
+        let loss = &result.diagnostics[0];
+        assert_eq!(loss.kind, DiagnosticKind::ConversionLoss);
+        assert_eq!(&input[loss.span.clone()], "href='jav&#x61;script:alert(1)'");
+        assert_eq!(result.diagnostics[1].kind, DiagnosticKind::HtmlRemoval);
+        assert_eq!(
+            &input[result.diagnostics[1].span.clone()],
+            "onclick='bad()'"
+        );
+        assert_eq!(
+            convert_with_mode(request, ConversionMode::Strict)
+                .unwrap_err()
+                .diagnostics(),
+            result.diagnostics
+        );
+
+        let output = cli_output(source, Wikitext, input);
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), result.content);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("prohibited HTML attribute href"));
+        let strict = output_with_stdin(cli_command(source, Wikitext).arg("--strict"), input);
+        assert!(!strict.status.success());
+        assert!(strict.stdout.is_empty());
+
+        let html = api(Wikitext, Html, &result.content);
+        let dom = scraper::Html::parse_fragment(&html);
+        let select = |selector| {
+            dom.select(&scraper::Selector::parse(selector).unwrap())
+                .count()
+        };
+        assert_eq!(select("div.panel > p"), 2);
+        assert_eq!(select("div.panel a[href='https://example.org']"), 1);
+        assert_eq!(select("div.panel span[lang=fr]"), 1);
+        assert_eq!(select("script, [onclick]"), 0);
+        assert!(html.contains("unsafe"));
+        assert!(!html.contains("alert(1)"));
+    }
+}
+
+#[test]
+fn wikitext_literal_html_preserves_allowed_attributes_and_renders_forbidden_tags_as_text() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    use Format::{Html, Wikitext};
+    let input = "Text <span class='label' style='color:red' onmouseover='bad()'>hello</span> <script>x</script>";
+    let result = convert_with_mode(
+        ConversionRequest {
+            source: Wikitext,
+            target: Html,
+            input,
+            context: &CONTEXT,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert!(result
+        .diagnostics
+        .iter()
+        .all(|d| d.kind == DiagnosticKind::HtmlRemoval));
+    assert_eq!(result.diagnostics.len(), 3);
+    let dom = scraper::Html::parse_fragment(&result.content);
+    let selector = scraper::Selector::parse("span.label[style='color:red']").unwrap();
+    assert_eq!(dom.select(&selector).next().unwrap().inner_html(), "hello");
+    assert!(dom
+        .root_element()
+        .text()
+        .collect::<String>()
+        .contains("<script>x</script>"));
+    let output = output_with_stdin(cli_command(Wikitext, Html).arg("--strict"), input);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("onmouseover"));
+}
+
+#[test]
+fn repeated_losses_refer_to_distinct_original_byte_ranges() {
+    use Format::{Gfm, Html, Wikitext};
+    let wiki = "한글 {{Discard}}\r\n\r\none [[bad\r\n\r\none [[bad";
+    let result = convert(ConversionRequest {
+        source: Wikitext,
+        target: Html,
+        input: wiki,
+        context: &CONTEXT,
+    })
+    .unwrap();
+    assert_eq!(result.diagnostics.len(), 3);
+    let ranges: Vec<_> = result.diagnostics.iter().map(|d| d.span.clone()).collect();
+    assert_eq!(&wiki[ranges[0].clone()], "{{Discard}}");
+    assert_eq!(&wiki[ranges[1].clone()], "one [[bad");
+    assert_eq!(&wiki[ranges[2].clone()], "one [[bad");
+    assert!(ranges[1].end < ranges[2].start);
+
+    let markdown = "`onclick=\"x()\"`\n\n<span onclick=\"x()\">hi</span>\n\n[go](javascript:bad)";
+    let result = convert(ConversionRequest {
+        source: Gfm,
+        target: Wikitext,
+        input: markdown,
+        context: &CONTEXT,
+    })
+    .unwrap();
+    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+    assert_eq!(
+        result.diagnostics[0].span.start,
+        markdown.rfind("onclick").unwrap()
+    );
+    assert_eq!(
+        &markdown[result.diagnostics[1].span.clone()],
+        "[go](javascript:bad)"
+    );
+}
+
+#[test]
+fn imported_fragments_keep_safe_link_attributes_and_literal_wiki_markup() {
+    use Format::{Html, Wikitext};
+    let input = "<br><hr style='color:red; /* allowed */ border:0'><p><a href='https://example.org' title='{{Literal}}'><b>bold</b></a></p>";
+    for convert in [api, cli] {
+        let wiki = convert(Html, Wikitext, input);
+        let recovered = convert(Wikitext, Html, &wiki);
+        let dom = scraper::Html::parse_fragment(&recovered);
+        for selector in [
+            "br",
+            "hr[style*='border:0']",
+            "span[title='{{Literal}}'] a > b",
+        ] {
+            assert_eq!(
+                dom.select(&scraper::Selector::parse(selector).unwrap())
+                    .count(),
+                1,
+                "{recovered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn literal_wiki_preformatted_content_is_not_expanded() {
+    use Format::{Html, Wikitext};
+    let actual = api(
+        Wikitext,
+        Html,
+        "<pre>{{keep}} &amp; [[Main Page]] <b>literal</b></pre>",
+    );
+    let dom = scraper::Html::parse_fragment(&actual);
+    let pre = dom
+        .select(&scraper::Selector::parse("pre").unwrap())
+        .next()
+        .unwrap();
+    assert_eq!(
+        pre.text().collect::<String>(),
+        "{{keep}} & [[Main Page]] <b>literal</b>"
+    );
+    assert_eq!(pre.child_elements().count(), 0);
+}
+
+#[test]
+#[ignore = "requires the pinned MediaWiki source archive; see docs/compatibility.md"]
+fn pinned_html_attribute_safety_cases() {
+    use rwikitext::DiagnosticKind;
+    use Format::{Html, Wikitext};
+
+    let path = "vendor/wikimedia/parsoid/tests/parser/parserTests.txt";
+    let source = fs::read_to_string(mediawiki_release().join(path)).unwrap();
+    for (title, safe) in [
+        ("T4304: HTML attribute safety (link)", true),
+        ("MSIE CSS safety test: hex code", false),
+    ] {
+        let (input, expected) = parser_case(&source, title);
+        let result = convert(ConversionRequest {
+            source: Wikitext,
+            target: Html,
+            input: &input,
+            context: &CONTEXT,
+        })
+        .unwrap();
+        assert_eq!(
+            document_structure(&result.content),
+            document_structure(&expected)
+        );
+        let actual_dom = scraper::Html::parse_fragment(&result.content);
+        let expected_dom = scraper::Html::parse_fragment(&expected);
+        let selector = scraper::Selector::parse("div").unwrap();
+        let actual = actual_dom.select(&selector).next().unwrap();
+        let expected = expected_dom.select(&selector).next().unwrap();
+        if safe {
+            assert_eq!(actual.attr("title"), expected.attr("title"));
+            assert!(result.diagnostics.is_empty());
+        } else {
+            assert_eq!(expected.attr("style"), Some("/* insecure input */"));
+            assert_eq!(actual.attr("style"), None);
+            assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss);
+        }
+        println!("{path}: {title}");
+    }
 }
 
 #[test]

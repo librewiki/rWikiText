@@ -3,9 +3,14 @@ use crate::ConversionError;
 #[derive(Debug, Clone)]
 pub(crate) enum Inline {
     Text(String),
+    Emphasis {
+        strong: bool,
+        children: Vec<Inline>,
+    },
+    Html(String),
     Link {
         href: String,
-        label: String,
+        label: Vec<Inline>,
         internal: bool,
     },
 }
@@ -139,28 +144,11 @@ fn invalid_url_character(c: char) -> bool {
 }
 
 fn external_valid(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    let host = if lower.starts_with("https://") {
-        &url[8..]
-    } else if lower.starts_with("http://") {
-        &url[7..]
-    } else {
-        return false;
-    };
-    !host.is_empty()
-        && !host.starts_with(['/', '?', '#'])
-        && !url.chars().any(invalid_url_character)
+    crate::html_policy::external_url(url) && !url.chars().any(invalid_url_character)
 }
-pub(crate) fn from_href(href: &str, label: String) -> Result<Inline, ConversionError> {
-    if label.is_empty() {
-        return Err(ConversionError::new("empty link labels are unsupported"));
-    }
+pub(crate) fn link_target(href: &str) -> Result<(String, bool), ConversionError> {
     if external_valid(href) {
-        return Ok(Inline::Link {
-            href: href.to_owned(),
-            label,
-            internal: false,
-        });
+        return Ok((href.to_owned(), false));
     }
     let target = if let Some(s) = href.strip_prefix("./") {
         s
@@ -172,13 +160,9 @@ pub(crate) fn from_href(href: &str, label: String) -> Result<Inline, ConversionE
         return Err(ConversionError::new("unsupported or unsafe link target"));
     };
     let decoded = decode_component(target)?;
-    let normalized = internal_href(&decoded)?;
-    Ok(Inline::Link {
-        href: normalized,
-        label,
-        internal: true,
-    })
+    Ok((internal_href(&decoded)?, true))
 }
+
 fn decoded(input: &str) -> String {
     html_escape::decode_html_entities(input).into_owned()
 }
@@ -199,11 +183,15 @@ fn character_reference(input: &str) -> Option<(&str, String)> {
 
 fn bare_external(input: &str, position: usize) -> Option<(&str, String)> {
     let suffix = &input[position..];
-    if !(suffix.starts_with("http://") || suffix.starts_with("https://"))
-        || input[..position]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    if !crate::html_policy::PROTOCOLS.iter().any(|prefix| {
+        *prefix != "//"
+            && suffix
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    }) || input[..position]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
     {
         return None;
     }
@@ -235,11 +223,54 @@ fn bare_external(input: &str, position: usize) -> Option<(&str, String)> {
 }
 
 pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, ConversionError> {
+    parse(input, language, true)
+}
+
+fn parse(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, ConversionError> {
+    let mut result = Vec::new();
+    let (mut start, mut position) = (0, 0);
+    while position < input.len() {
+        let rest = &input[position..];
+        // Links and embedded HTML are parsed as single tokens; don't split them
+        // merely because their contents span multiple source lines.
+        if links && rest.starts_with("[[") {
+            if let Some(end) = rest.find("]]") {
+                position += end + 2;
+                continue;
+            }
+        }
+        if let Some((_, end)) = crate::html_policy::wiki_fragment(rest) {
+            position += end;
+            continue;
+        }
+        if rest.starts_with('\n') {
+            result.extend(parse_line(&input[start..position], language, links)?);
+            text(&mut result, "\n");
+            start = position + 1;
+        }
+        position += rest.chars().next().unwrap().len_utf8();
+    }
+    result.extend(parse_line(&input[start..], language, links)?);
+    Ok(result)
+}
+
+#[derive(Debug)]
+enum QuotePart {
+    Content(Vec<Inline>),
+    Quote {
+        width: usize,
+        previous: Option<char>,
+        before_previous: Option<char>,
+    },
+}
+
+fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, ConversionError> {
+    let mut parts = Vec::new();
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < input.len() {
         let rest = &input[pos..];
-        if let Some(body) = rest.strip_prefix("[[") {
+        if let Some(body) = rest.strip_prefix("[[").filter(|_| links) {
             let end = body
                 .find("]]")
                 .ok_or_else(|| ConversionError::new("unclosed internal link"))?;
@@ -251,13 +282,6 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
                 Some(_) => return Err(ConversionError::new("unsupported wikilink label")),
                 None => (link, link),
             };
-            if label.contains("[[")
-                || label.contains("{{")
-                || label.contains('<')
-                || label.contains("''")
-            {
-                return Err(ConversionError::new("unsupported link label"));
-            }
             let target = decoded(target);
             let trail_len = body[end + 2..]
                 .bytes()
@@ -278,15 +302,23 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
                     "linktrails for this site language are unsupported",
                 ));
             }
-            let mut label = decoded(label);
-            label.push_str(&body[end + 2..end + 2 + trail_len]);
+            let mut label = parse(label, language, false)?;
+            text(&mut label, &body[end + 2..end + 2 + trail_len]);
             out.push(Inline::Link {
                 href: internal_href(&target)?,
                 label,
                 internal: true,
             });
             pos += end + 4 + trail_len;
-        } else if rest.starts_with("[http://") || rest.starts_with("[https://") {
+        } else if links
+            && rest.strip_prefix('[').is_some_and(|tail| {
+                let candidate = tail
+                    .split(|c: char| c.is_whitespace() || c == ']')
+                    .next()
+                    .unwrap_or("");
+                external_valid(&decoded(candidate))
+            })
+        {
             let end = rest
                 .find(']')
                 .ok_or_else(|| ConversionError::new("unclosed external link"))?;
@@ -296,24 +328,43 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
                 .ok_or_else(|| ConversionError::new("external links require a label"))?;
             let label = label.trim_start();
             let url = decoded(url);
-            if !external_valid(&url)
-                || label.is_empty()
-                || label.contains(['[', ']', '<'])
-                || label.contains("{{")
-                || label.contains("''")
-            {
+            if !external_valid(&url) || label.is_empty() || label.contains(['[', ']']) {
                 return Err(ConversionError::new("invalid external link"));
             }
             out.push(Inline::Link {
                 href: url,
-                label: decoded(label),
+                label: parse(label, language, false)?,
                 internal: false,
             });
             pos += end + 1;
-        } else if let Some((source, url)) = bare_external(input, pos) {
+        } else if rest.starts_with("''") {
+            let count = rest.bytes().take_while(|&b| b == b'\'').count();
+            let width = if count >= 5 {
+                5
+            } else if count >= 3 {
+                3
+            } else {
+                2
+            };
+            let literal = count - width;
+            if literal > 0 {
+                text(&mut out, &"'".repeat(literal));
+            }
+            let mut previous = input[..pos + literal].chars().rev();
+            parts.push(QuotePart::Content(std::mem::take(&mut out)));
+            parts.push(QuotePart::Quote {
+                width,
+                previous: previous.next(),
+                before_previous: previous.next(),
+            });
+            pos += count;
+        } else if let Some((_, end)) = crate::html_policy::wiki_fragment(rest) {
+            out.push(Inline::Html(crate::embedded_html(&rest[..end], language)));
+            pos += end;
+        } else if let Some((source, url)) = links.then(|| bare_external(input, pos)).flatten() {
             out.push(Inline::Link {
                 href: url.clone(),
-                label: url,
+                label: vec![Inline::Text(url)],
                 internal: false,
             });
             pos += source.len();
@@ -329,7 +380,134 @@ pub(crate) fn parse_wiki(input: &str, language: &str) -> Result<Vec<Inline>, Con
             text(&mut out, &rest[..ch.len_utf8()]);
         }
     }
-    Ok(out)
+    parts.push(QuotePart::Content(out));
+    Ok(resolve_quotes(parts))
+}
+
+#[derive(Clone, Copy)]
+enum QuoteOp {
+    Open(bool),
+    Close,
+}
+
+// Parsoid resolves quote markers per line, balancing odd italic/bold counts
+// before deciding the order of tags for a five-apostrophe marker.
+fn resolve_quotes(mut parts: Vec<QuotePart>) -> Vec<Inline> {
+    let (mut italics, mut bold) = (0, 0);
+    for part in &parts {
+        if let QuotePart::Quote { width, .. } = part {
+            italics += usize::from(*width == 2 || *width == 5);
+            bold += usize::from(*width == 3 || *width == 5);
+        }
+    }
+    if italics % 2 == 1 && bold % 2 == 1 {
+        let mut candidates = [None; 3];
+        for (i, part) in parts.iter().enumerate() {
+            if let QuotePart::Quote {
+                width: 3,
+                previous,
+                before_previous,
+            } = part
+            {
+                let whitespace = |c: Option<char>| c.is_none_or(char::is_whitespace);
+                let category = if whitespace(*previous) {
+                    2
+                } else if whitespace(*before_previous) {
+                    0
+                } else {
+                    1
+                };
+                if candidates[category].is_none() {
+                    candidates[category] = Some(i);
+                }
+            }
+        }
+        if let Some(index) = candidates.into_iter().flatten().next() {
+            if let QuotePart::Content(previous) = &mut parts[index - 1] {
+                text(previous, "'");
+            }
+            if let QuotePart::Quote { width, .. } = &mut parts[index] {
+                *width = 2;
+            }
+        }
+    }
+    use QuoteOp::{Close as C, Open as O};
+    let mut actions = vec![Vec::<QuoteOp>::new(); parts.len()];
+    let mut state = "";
+    let mut both = 0;
+    for index in 0..parts.len() {
+        let QuotePart::Quote { width, .. } = parts[index] else {
+            continue;
+        };
+        let (next, ops): (&str, Vec<QuoteOp>) = match (width, state) {
+            (2, "i") => ("", vec![C]),
+            (2, "bi") => ("b", vec![C]),
+            (2, "ib") => ("b", vec![C, C, O(true)]),
+            (2, "both") => {
+                actions[both] = vec![O(true), O(false)];
+                ("b", vec![C])
+            }
+            (2, "b") => ("bi", vec![O(false)]),
+            (2, "") => ("i", vec![O(false)]),
+            (3, "b") => ("", vec![C]),
+            (3, "ib") => ("i", vec![C]),
+            (3, "bi") => ("i", vec![C, C, O(false)]),
+            (3, "both") => {
+                actions[both] = vec![O(false), O(true)];
+                ("i", vec![C])
+            }
+            (3, "i") => ("ib", vec![O(true)]),
+            (3, "") => ("b", vec![O(true)]),
+            (5, "b") => ("i", vec![C, O(false)]),
+            (5, "i") => ("b", vec![C, O(true)]),
+            (5, "bi") | (5, "ib") => ("", vec![C, C]),
+            (5, "both") => {
+                actions[both] = vec![O(false), O(true)];
+                ("", vec![C, C])
+            }
+            (5, "") => {
+                both = index;
+                ("both", vec![])
+            }
+            _ => unreachable!(),
+        };
+        actions[index] = ops;
+        state = next;
+    }
+    if state == "both" {
+        actions[both] = vec![O(true), O(false)];
+    }
+    let mut result = Vec::new();
+    let mut stack: Vec<(bool, Vec<Inline>)> = Vec::new();
+    fn append(result: &mut Vec<Inline>, stack: &mut [(bool, Vec<Inline>)], item: Inline) {
+        if let Some((_, children)) = stack.last_mut() {
+            children.push(item);
+        } else {
+            result.push(item);
+        }
+    }
+    fn close(result: &mut Vec<Inline>, stack: &mut Vec<(bool, Vec<Inline>)>) {
+        if let Some((strong, children)) = stack.pop() {
+            append(result, stack, Inline::Emphasis { strong, children });
+        }
+    }
+    for (part, ops) in parts.into_iter().zip(actions) {
+        if let QuotePart::Content(items) = part {
+            for item in items {
+                append(&mut result, &mut stack, item);
+            }
+        }
+        for op in ops {
+            match op {
+                O(strong) => stack.push((strong, Vec::new())),
+                C => close(&mut result, &mut stack),
+            }
+        }
+    }
+    while !stack.is_empty() {
+        close(&mut result, &mut stack);
+    }
+    result
 }
 
 pub(crate) fn wiki_target(href: &str) -> Result<String, ConversionError> {
@@ -340,7 +518,15 @@ pub(crate) fn plain(inlines: &[Inline]) -> String {
     inlines
         .iter()
         .map(|i| match i {
-            Inline::Text(s) | Inline::Link { label: s, .. } => s.as_str(),
+            Inline::Text(s) => s.clone(),
+            Inline::Emphasis { children, .. }
+            | Inline::Link {
+                label: children, ..
+            } => plain(children),
+            Inline::Html(html) => scraper::Html::parse_fragment(html)
+                .root_element()
+                .text()
+                .collect(),
         })
         .collect()
 }
