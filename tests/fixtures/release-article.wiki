@@ -1,0 +1,40 @@
+== Getting started ==
+Read the ''short'' guide for '''{{1x|first-time}}''' visitors & see [[Main Page|the index]].
+Start with checklist &#65;.
+
+* Gather the references
+*# Read [https://example.org/guide the handbook]
+*# Save a copy
+* Write a summary
+
+=== Terms ===
+; Field kit
+: The supplies for a visit
+
+{|
+! Item !! Count
+|-
+| Lamp || 1
+|-
+| Map || 2
+|}
+
+{| class="wikitable"
+|+ Schedule
+! Day !! Task
+|-
+| rowspan="2" | Monday
+| Survey
+|-
+| Review
+|}
+
+----
+
+ Log entry
+   Indented detail
+
+Bring a <span title="Use after dark">lamp</span>.
+
+[[Category:Field work|Notes & maps]]
+[[Category:Guides]]

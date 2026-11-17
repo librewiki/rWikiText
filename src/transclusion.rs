@@ -12,7 +12,12 @@ pub(crate) fn metadata(call: &expansion::Invocation) -> (String, String) {
     let mut params = BTreeMap::new();
     let mut positional = Vec::new();
     for arg in &call.arguments {
-        params.insert(&arg.key, json!({"wt": arg.value}));
+        let value = if let Some(source) = &arg.key_source {
+            json!({"wt": arg.value, "key": {"wt": source}})
+        } else {
+            json!({"wt": arg.value})
+        };
+        params.insert(&arg.key, value);
         positional.push(if arg.named {
             json!({"k": arg.key, "named": true})
         } else {
@@ -138,6 +143,17 @@ fn valid_target(target: &Value, wt: &str) -> bool {
     }
 }
 
+fn complete_key_comments(mut source: &str) -> bool {
+    while let Some(start) = source.find("<!--") {
+        source = &source[start + 4..];
+        let Some(end) = source.find("-->") else {
+            return false;
+        };
+        source = &source[end + 3..];
+    }
+    true
+}
+
 fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<String> {
     let target = &template["target"];
     let wt = target["wt"].as_str()?;
@@ -184,13 +200,18 @@ fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<Str
             ""
         };
         let function = target.get("function").is_some();
+        if key.trim() != key || key.contains(['|', '=', '{', '}', '<', '>']) {
+            return None;
+        }
+        let key_source = match param.and_then(|param| param.get("key")) {
+            Some(source) => Some(source.get("wt")?.as_str()?),
+            None => None,
+        };
         let explicit = named
+            || key_source.is_some()
             || key != positional.to_string()
             || !function && expansion::split_top(value, '=').len() > 1;
         if function && explicit {
-            return None;
-        }
-        if key.trim() != key || key.contains(['|', '=', '{', '}', '<', '>']) {
             return None;
         }
         if expansion::split_top(value, '|').len() != 1 {
@@ -198,7 +219,15 @@ fn assemble(template: &Value, infos: Option<&Value>, index: usize) -> Option<Str
         }
         call.push('|');
         if explicit {
-            call.push_str(key);
+            let source = key_source.unwrap_or(key);
+            if !complete_key_comments(source)
+                || expansion::strip_comments(source).trim() != key
+                || expansion::split_top(source, '|').len() != 1
+                || expansion::split_top(source, '=').len() != 1
+            {
+                return None;
+            }
+            call.push_str(source);
             call.push('=');
         } else {
             positional += 1;

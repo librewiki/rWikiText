@@ -2,8 +2,8 @@ use crate::WikiContext;
 
 // This subset corresponds to context values available in WikiContext. Unknown names
 // remain available for template lookup instead of being replaced with fabricated data.
-fn variable(name: &str, context: &WikiContext<'_>) -> Option<String> {
-    let title = context.page_title.replace('_', " ");
+fn variable(name: &str, context: &WikiContext<'_>, page_title: &str) -> Option<String> {
+    let title = page_title.replace('_', " ");
     let (namespace, page) = split_title(&title);
     Some(match name.trim() {
         "!" => "|".into(),
@@ -16,7 +16,7 @@ fn variable(name: &str, context: &WikiContext<'_>) -> Option<String> {
         "BASEPAGENAME" => page.rsplit_once('/').map_or(page, |(base, _)| base).into(),
         "ROOTPAGENAME" => page.split('/').next().unwrap_or(page).into(),
         "CURRENTYEAR" | "CURRENTMONTH" | "CURRENTMONTH1" | "CURRENTDAY" | "CURRENTDAY2"
-        | "CURRENTHOUR" | "CURRENTTIME" | "CURRENTTIMESTAMP" => {
+        | "CURRENTHOUR" | "CURRENTTIME" | "CURRENTTIMESTAMP" | "CURRENTDOW" | "CURRENTWEEK" => {
             time_value(name, context.reference_time)?
         }
         _ => return None,
@@ -61,6 +61,54 @@ fn time_value(name: &str, time: &str) -> Option<String> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || sec > 59 {
         return None;
     }
+    let calendar = || {
+        let y: i32 = year.parse().ok()?;
+        let leap = |year: i32| year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let month_days = [
+            31,
+            if leap(y) { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
+        if d > month_days[(m - 1) as usize] {
+            return None;
+        }
+        let ordinal = month_days[..(m - 1) as usize].iter().sum::<u32>() + d;
+        let weekday = |year: i32, day: u32| {
+            let previous = year - 1;
+            (previous * 365 + previous.div_euclid(4) - previous.div_euclid(100)
+                + previous.div_euclid(400)
+                + day as i32)
+                .rem_euclid(7) as u32
+        };
+        let dow = weekday(y, ordinal);
+        let iso_day = if dow == 0 { 7 } else { dow };
+        let weeks = |year| {
+            let jan1 = weekday(year, 1);
+            if jan1 == 4 || (jan1 == 3 && leap(year)) {
+                53
+            } else {
+                52
+            }
+        };
+        let week = (ordinal as i32 - iso_day as i32 + 10) / 7;
+        let week = if week == 0 {
+            weeks(y - 1)
+        } else if week > weeks(y) {
+            1
+        } else {
+            week
+        };
+        Some((dow, week))
+    };
     Some(match name.trim() {
         "CURRENTYEAR" => year.into(),
         "CURRENTMONTH" => month.into(),
@@ -70,6 +118,8 @@ fn time_value(name: &str, time: &str) -> Option<String> {
         "CURRENTHOUR" => hour.into(),
         "CURRENTTIME" => format!("{hour}:{minute}"),
         "CURRENTTIMESTAMP" => format!("{year}{month}{day}{hour}{minute}{second}"),
+        "CURRENTDOW" => calendar()?.0.to_string(),
+        "CURRENTWEEK" => calendar()?.1.to_string(),
         _ => return None,
     })
 }
@@ -170,23 +220,35 @@ fn equal_values(left: &str, right: &str) -> bool {
 pub(crate) fn evaluate(
     name: &str,
     args: &[&str],
+    has_colon: bool,
     context: &WikiContext<'_>,
     data: &dyn crate::WikiData,
     source: std::ops::Range<usize>,
     mut expand: impl FnMut(&str) -> Result<String, crate::ConversionError>,
 ) -> Result<Option<String>, crate::ConversionError> {
     let key = name.trim().to_ascii_uppercase();
-    if args.is_empty() {
-        if let Some(value) = variable(name, context) {
-            let literal = matches!(
-                name.trim(),
-                "PAGENAME"
-                    | "FULLPAGENAME"
-                    | "NAMESPACE"
-                    | "SUBPAGENAME"
-                    | "BASEPAGENAME"
-                    | "ROOTPAGENAME"
-            );
+    let literal = matches!(
+        name.trim(),
+        "PAGENAME" | "FULLPAGENAME" | "NAMESPACE" | "SUBPAGENAME" | "BASEPAGENAME" | "ROOTPAGENAME"
+    );
+    if args.is_empty() || (literal && has_colon && args.len() == 1) {
+        let title = if args.is_empty() {
+            context.page_title.to_owned()
+        } else {
+            let expanded = expand(args[0])?;
+            let decoded = html_escape::decode_html_entities(expanded.trim());
+            let title = decoded
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches(':');
+            if crate::inline::internal_href(title).is_err() {
+                String::new()
+            } else {
+                crate::inline::normalize_title(title)
+            }
+        };
+        if let Some(value) = variable(name, context, &title) {
             return Ok(Some(if literal {
                 escape_wikitext(&value)
             } else {
@@ -339,6 +401,7 @@ mod tests {
         let result = evaluate(
             "#if",
             &["yes", "chosen", "unused"],
+            true,
             &context,
             &Data,
             0..1,
@@ -353,6 +416,7 @@ mod tests {
         let result = evaluate(
             "#ifexist",
             &["Failure", "yes", "no"],
+            true,
             &context,
             &Data,
             0..1,

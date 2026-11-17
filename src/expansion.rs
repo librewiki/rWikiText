@@ -6,6 +6,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub(crate) struct Argument {
     pub key: String,
+    pub key_source: Option<String>,
     pub value: String,
     pub named: bool,
 }
@@ -359,6 +360,7 @@ impl Engine<'_, '_> {
         let parts = split_top(&input[width..input.len() - width], '|');
         if parameter {
             let key = self.text(parts[0], params, depth, source.clone())?;
+            let key = strip_comments(&key);
             let value = if let Some(v) = params.get(key.trim()) {
                 let text = self.text(&v.text, &v.parent, depth, source.clone())?;
                 if v.named {
@@ -395,16 +397,21 @@ impl Engine<'_, '_> {
         args.extend_from_slice(&parts[1..]);
         let data = self.data.unwrap_or(&EMPTY_DATA);
         let context = self.context;
-        if let Some(value) =
-            crate::functions::evaluate(func.trim(), &args, context, data, source.clone(), |s| {
-                self.text(s, params, depth + 1, source.clone())
-            })?
-        {
+        if let Some(value) = crate::functions::evaluate(
+            func.trim(),
+            &args,
+            arg.is_some(),
+            context,
+            data,
+            source.clone(),
+            |s| self.text(s, params, depth + 1, source.clone()),
+        )? {
             let arguments = parts[1..]
                 .iter()
                 .enumerate()
                 .map(|(i, value)| Argument {
                     key: (i + 1).to_string(),
+                    key_source: None,
                     value: (*value).to_owned(),
                     named: false,
                 })
@@ -443,18 +450,17 @@ impl Engine<'_, '_> {
         let mut position = 1;
         for part in &parts[1..] {
             let equal = split_top(part, '=');
-            let (key, value, named) = if equal.len() > 1 {
-                (
-                    self.text(equal[0], params, depth + 1, source.clone())?
-                        .trim()
-                        .to_owned(),
-                    equal[1..].join("="),
-                    true,
-                )
+            let (key, key_source, value, named) = if equal.len() > 1 {
+                let expanded = self.text(equal[0], params, depth + 1, source.clone())?;
+                let key = strip_comments(&expanded).trim().to_owned();
+                let raw = equal[0].trim();
+                let key_source =
+                    (raw != key && strip_comments(raw).trim() == key).then(|| raw.to_owned());
+                (key, key_source, equal[1..].join("="), true)
             } else {
                 let key = position.to_string();
                 position += 1;
-                (key, (*part).to_owned(), false)
+                (key, None, (*part).to_owned(), false)
             };
             values.insert(
                 key.clone(),
@@ -466,6 +472,7 @@ impl Engine<'_, '_> {
             );
             arguments.push(Argument {
                 key,
+                key_source,
                 value: if named {
                     value.trim().to_owned()
                 } else {
@@ -614,6 +621,25 @@ fn literal_len(input: &str) -> Option<usize> {
         }
     }
     None
+}
+
+pub(crate) fn strip_comments(input: &str) -> String {
+    let mut output = String::new();
+    let mut pos = 0;
+    while pos < input.len() {
+        let tail = &input[pos..];
+        if tail.starts_with("<!--") {
+            pos += tail.find("-->").map_or(tail.len(), |n| n + 3);
+        } else if let Some(len) = literal_len(tail) {
+            output.push_str(&tail[..len]);
+            pos += len;
+        } else {
+            let len = tail.chars().next().unwrap().len_utf8();
+            output.push_str(&tail[..len]);
+            pos += len;
+        }
+    }
+    output
 }
 fn find_active_tag(input: &str, tag: &str) -> Option<usize> {
     let mut pos = 0;

@@ -1,0 +1,8 @@
+{
+  "templates": {
+    "Template:1x": "{{{1}}}"
+  },
+  "pages": {
+    "Main_Page": true
+  }
+}

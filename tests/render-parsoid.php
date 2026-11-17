@@ -12,7 +12,11 @@ use Wikimedia\Parsoid\Utils\Title;
 [, $release, $pageTitle, $language, $referenceTime] = $argv;
 require $release . '/vendor/autoload.php';
 
-$site = new MockSiteConfig([]);
+$site = new class ([]) extends MockSiteConfig {
+    public function getMagicWordMatcher(string $id): string {
+        return $id === 'redirect' ? '/^#REDIRECT$/i' : parent::getMagicWordMatcher($id);
+    }
+};
 $site->setFakeTimestamp((new DateTimeImmutable($referenceTime))->getTimestamp());
 $title = Title::newFromText($pageTitle, $site);
 $content = new MockPageContent(['main' => stream_get_contents(STDIN)], $title);

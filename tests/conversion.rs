@@ -7,6 +7,9 @@ use pulldown_cmark::{html, Options, Parser};
 use rwikitext::{convert, ConversionRequest, Format, WikiContext};
 use scraper::{ElementRef, Html, Node};
 
+#[path = "support/parsoid.rs"]
+mod parsoid;
+
 const CONTEXT: WikiContext<'static> = WikiContext {
     page_title: "Parser test",
     site_language: "en",
@@ -426,6 +429,85 @@ fn api_and_cli_report_located_conversion_loss_and_support_strict_mode() {
 }
 
 #[test]
+fn api_and_cli_reject_directions_without_exactly_one_wikitext_endpoint() {
+    use Format::{Gfm, Html, Wikitext};
+
+    for (source, target) in [
+        (Wikitext, Wikitext),
+        (Gfm, Gfm),
+        (Html, Html),
+        (Gfm, Html),
+        (Html, Gfm),
+    ] {
+        let error = convert(ConversionRequest {
+            source,
+            target,
+            input: "Body",
+            context: &CONTEXT,
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unsupported conversion direction"));
+
+        let output = cli_output(source, target, "Body");
+        assert!(!output.status.success(), "{source:?} → {target:?}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unsupported conversion direction")
+        );
+    }
+}
+
+#[test]
+fn invalid_parsoid_metadata_is_a_located_loss_in_api_and_cli() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+
+    let opening = r##"<span about="#mwt1" typeof="mw:Transclusion" data-mw='{bad}'>"##;
+    let input = format!("<p>앞 {opening}visible</span>.</p>");
+    let request = ConversionRequest {
+        source: Format::Html,
+        target: Format::Wikitext,
+        input: &input,
+        context: &CONTEXT,
+    };
+    let best = convert(request).unwrap();
+    let [loss] = best.diagnostics.as_slice() else {
+        panic!("expected one conversion loss, got {:?}", best.diagnostics)
+    };
+    assert_eq!(loss.kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(&input[loss.span.clone()], opening);
+    assert!(loss
+        .message
+        .contains("invalid Parsoid transclusion metadata"));
+    assert_eq!(
+        api(Format::Wikitext, Format::Html, &best.content),
+        "<p>앞 <span>visible</span>.</p>"
+    );
+    assert_eq!(
+        convert_with_mode(request, ConversionMode::Strict)
+            .unwrap_err()
+            .diagnostics(),
+        best.diagnostics
+    );
+
+    let output = cli_output(Format::Html, Format::Wikitext, &input);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), best.content);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim_end(),
+        loss.to_string()
+    );
+    let strict = output_with_stdin(
+        cli_command(Format::Html, Format::Wikitext).arg("--strict"),
+        &input,
+    );
+    assert!(!strict.status.success());
+    assert!(strict.stdout.is_empty());
+    assert_eq!(strict.stderr, output.stderr);
+}
+
+#[test]
 fn html_policy_recovers_malformed_markup_and_reports_meaning_bearing_removals() {
     use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
     use Format::{Gfm, Html, Wikitext};
@@ -476,6 +558,43 @@ fn html_policy_recovers_malformed_markup_and_reports_meaning_bearing_removals() 
         assert!(html.contains("unsafe"));
         assert!(!html.contains("alert(1)"));
     }
+}
+
+#[test]
+fn reported_html_removal_without_conversion_loss_passes_strict_mode() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+
+    let input = "<span lang='ko' onclick='bad()'>서울</span>";
+    let result = convert_with_mode(
+        ConversionRequest {
+            source: Format::Html,
+            target: Format::Wikitext,
+            input,
+            context: &CONTEXT,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    let [removal] = result.diagnostics.as_slice() else {
+        panic!("expected one HTML removal, got {:?}", result.diagnostics)
+    };
+    assert_eq!(removal.kind, DiagnosticKind::HtmlRemoval);
+    assert_eq!(&input[removal.span.clone()], "onclick='bad()'");
+    assert!(removal.message.contains("onclick"));
+    assert!(result.content.contains("서울"));
+    assert!(result.content.contains("lang="));
+    assert!(!result.content.contains("onclick"));
+
+    let output = output_with_stdin(
+        cli_command(Format::Html, Format::Wikitext).arg("--strict"),
+        input,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), result.content);
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap().trim_end(),
+        removal.to_string()
+    );
 }
 
 #[test]
@@ -636,17 +755,10 @@ fn pinned_html_attribute_safety_cases() {
 #[ignore = "requires the pinned MediaWiki release and PHP; see docs/compatibility.md"]
 fn parsoid_confirms_complete_document_round_trips() {
     let render = |wikitext: &str| {
-        let php = std::env::var_os("RWIKITEXT_PHP").unwrap_or_else(|| "php".into());
-        let mut command = Command::new(php);
-        command
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/render-parsoid.php"))
-            .arg(mediawiki_release())
-            .args([
-                CONTEXT.page_title,
-                CONTEXT.site_language,
-                CONTEXT.reference_time,
-            ]);
-        stdout(output_with_stdin(&mut command, wikitext))
+        stdout(output_with_stdin(
+            &mut parsoid::parsoid_command(&CONTEXT),
+            wikitext,
+        ))
     };
 
     for convert in [api, cli] {

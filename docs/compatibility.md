@@ -1,6 +1,6 @@
 # Compatibility baseline
 
-The implementation baseline as of 2026-11-17 is [MediaWiki 1.46.2](https://www.mediawiki.org/wiki/Release_notes/1.46), including Parsoid v0.23.1 with [Parsoid HTML 2.8.0](https://www.mediawiki.org/wiki/Specs/HTML/2.8.0) as its default HTML version. The Rust tests render Markdown using the [published GitHub Flavored Markdown specification](https://github.github.com/gfm/).
+The implementation baseline as of 2026-11-17 is [MediaWiki 1.46.2](https://www.mediawiki.org/wiki/Release_notes/1.46), including Parsoid v0.23.1 with [Parsoid HTML 2.8.0](https://www.mediawiki.org/wiki/Specs/HTML/2.8.0) as its default HTML version. The Rust tests render Markdown against the [GitHub Flavored Markdown specification, version 0.29-gfm](https://github.github.com/gfm/).
 
 Download and check the exact MediaWiki archive with Python 3.12 or newer, then run the selected upstream parser cases with Cargo.
 
@@ -24,14 +24,33 @@ The `core`, `tables`, and `metadata` integration tests exercise additional pinne
 
 HTML policy tests cover safe attributes and URLs, prohibited elements and attributes, and malformed markup through general HTML, GFM, and embedded wikitext HTML. Imported HTML is repaired as a fragment. Parsoid's wikitext literal-tag rules preserve unsupported tags as visible text where applicable.
 
-Run the mixed-document workflow with PHP 8.3 or newer and the DOM, Intl, and Mbstring extensions enabled. The test uses `php` from `PATH` by default. Set `RWIKITEXT_PHP` to use a specific executable. The PHP renderer uses the bundled Parsoid and its local test site configuration.
-
-```sh
-cargo test --locked -- --include-ignored --nocapture
-```
+The mixed-document workflow needs PHP 8.3 or newer with DOM, Intl, and Mbstring enabled. The test uses `php` from `PATH` by default. Set `RWIKITEXT_PHP` to use a specific executable. The PHP renderer uses the bundled Parsoid and its local test site configuration.
 
 The complete fixtures in `tests/fixtures/milestone.*` cover all four conversions and both wikitext round trips through the Rust API and CLI. The test renders the starting and recovered wikitext with the pinned Parsoid, using the same English test wiki, page title, and reference time. It compares the resulting structure and the intermediate GFM and HTML with the expected HTML fixture. CLI tests also exercise file and standard input and check standard output and standard error.
 
 The `transclusion`, `wiki_links`, `functions`, and `parsoid_transclusion` integration suites exercise caller-thread lookups, the three lookup outcomes, each configurable expansion limit, and CLI conversion using `tests/fixtures/wiki-data.json`. They compare selected release fixtures for template inclusion, red links, image sizing and caption behavior, magic words, and bundled conditional functions. The Parsoid comparisons include template calls with a computed name, list transclusion, missing templates, and the `data-mw` for core padding functions.
 
 The verified parser-function subset covers Unicode case conversion, padding, template-syntax escape words, page-title and language variables, numeric UTC time variables, and the bundled `#if`, `#ifeq`, `#ifexist`, and `#switch` functions. HTML template recovery supports standalone and inline transclusion groups with validated targets and arguments. Transclusions that generate partial tags or link targets can render as content with a conversion-loss diagnostic for the invocation.
+
+## First-release verification
+
+Use a PHP executable with the extensions listed above and run the complete suite, including the tests that require local upstream files.
+
+```sh
+python scripts/fetch-compatibility.py
+cargo check --locked --all-targets
+cargo test --locked -- --include-ignored --nocapture
+```
+
+The [pinned parser case inventory](parser-case-inventory.md) records the source cases and the scope of the upstream comparison.
+
+The 2026-11-17 run on Windows x86-64 used Rust 1.100.0 and PHP 8.4.27. The archive checksum and all-target type check passed. The full suite passed 130 tests with zero ignored, including the enabled release fixtures and 27 newly selected upstream parser cases. The inventory records the outstanding core cases.
+
+| Release contract | Verification |
+| --- | --- |
+| Four conversion directions and both wikitext round trips | `conversion` and `release_documents` exercise the Rust API and CLI. They compare the GFM structures used by the fixtures, including native tables and permitted HTML fallback, and use pinned Parsoid to render the starting and recovered wikitext under the same wiki context. |
+| Format restrictions | `conversion` checks that the API and CLI reject each of the other five format pairs. |
+| Page metadata and GFM body-only loss | `metadata` and `release_documents` check structured metadata, HTML round-trip preservation, and located loss diagnostics for a standalone GFM body. |
+| HTML policy, invalid Parsoid metadata, and strict mode | `conversion`, `tables`, and `parsoid_transclusion` check element, attribute, and URL handling, general HTML import, validated template recovery, and errors with original input byte ranges. Strict mode rejects conversion loss and still reports HTML removals that preserve document meaning. CLI tests check output and diagnostics on their separate streams. |
+| Callback outcomes and reproducibility | `transclusion`, `wiki_links`, and `functions` cover synchronous caller-thread lookups, found and missing data, fatal lookup errors, and repeatable CLI conversions with local wiki data. |
+| Expansion bounds | `transclusion` checks separate depth, count, and UTF-8 output-byte limits with located diagnostics. It also checks an expansion that reaches the configured limits and nested parameter expansion with empty output. |

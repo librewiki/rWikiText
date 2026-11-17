@@ -16,7 +16,8 @@ impl WikiData for Data {
             "Template:Inner" => Ok(Some("{{{1}}}".into())),
             "Template:Inclusion" => Ok(Some("outside<noinclude>hidden</noinclude><onlyinclude>inside<includeonly>included</includeonly></onlyinclude>tail".into())),
             "Template:Loop" => Ok(Some("{{Loop}}".into())),
-            "Template:Big" => Ok(Some("123456789".into())),
+            "Template:Big" => Ok(Some("Ω界".into())),
+            "Template:One" => Ok(Some("1".into())),
             "Template:Mixed_name" => Ok(Some("normalized".into())),
             "Template:Unused" => Ok(Some("good".into())),
             "Template:Fail" => Err(LookupError::new("offline")),
@@ -100,37 +101,59 @@ fn lookup_errors_carry_the_invocation_span() {
 fn independent_expansion_limits_fail() {
     let data = Data::default();
     let base = ExpansionLimits::default();
-    for (input, limits) in [
+    for (input, limits, invocation, reason) in [
         (
             "{{Loop}}",
             ExpansionLimits {
                 max_depth: 2,
                 ..base
             },
+            "{{Loop}}",
+            "depth",
         ),
         (
-            "{{Loop}}",
+            "{{One}}{{One}}{{One}}",
             ExpansionLimits {
                 max_expansions: 2,
                 ..base
             },
+            "{{One}}",
+            "count",
         ),
         (
             "{{Big}}",
             ExpansionLimits {
-                max_output_bytes: 5,
+                max_output_bytes: 4,
                 ..base
             },
+            "{{Big}}",
+            "output byte",
         ),
     ] {
         let err = run(input, &data, limits).unwrap_err();
-        assert!(
-            err.diagnostics()
-                .iter()
-                .any(|d| d.kind == DiagnosticKind::ExpansionLimit),
-            "{err:?}"
+        let [diagnostic] = err.diagnostics() else {
+            panic!("expected one expansion limit diagnostic, got {err:?}")
+        };
+        assert_eq!(diagnostic.kind, DiagnosticKind::ExpansionLimit);
+        assert_eq!(
+            diagnostic.span,
+            input.rfind(invocation).unwrap()..input.len()
         );
+        assert!(diagnostic.message.contains(reason), "{diagnostic}");
     }
+
+    let result = run(
+        "{{Big}}",
+        &data,
+        ExpansionLimits {
+            max_depth: 1,
+            max_expansions: 1,
+            max_output_bytes: 5,
+        },
+    )
+    .unwrap();
+    assert!(result.diagnostics.is_empty());
+    assert_eq!(body(&result.content), "Ω界");
 }
 
 #[test]

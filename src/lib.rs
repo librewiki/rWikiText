@@ -385,6 +385,7 @@ fn prepare_wikitext(
         ConversionError::lookup(sanitized_span(range), "link", target, error)
     })?;
     if request.target == Format::Html {
+        let tables = wiki_table_ranges(&sanitized.text);
         for call in &expanded.invocations {
             let span = project(call.expanded_range.clone());
             let source = call.source_range.clone();
@@ -420,7 +421,14 @@ fn prepare_wikitext(
                 };
             let delimiter = !fragment.trim().is_empty()
                 && fragment.trim().bytes().all(|ch| matches!(ch, b'|' | b'='));
-            if joins_block || joins_linktrail || delimiter && !aligned {
+            let table = tables.partition_point(|range| range.start <= span.start);
+            let table = table > 0
+                && tables[table - 1].contains(&span.start)
+                && table_delimiter(&sanitized.text, &span);
+            if joins_block
+                || joins_linktrail
+                || delimiter && (table || heading_delimiter(&sanitized.text, &span))
+            {
                 diagnostics.push(Diagnostic::loss(
                     source,
                     "cannot attach Parsoid metadata to this combined block or link",
@@ -467,6 +475,72 @@ fn prepare_wikitext(
     );
 
     Ok((document, metadata.metadata))
+}
+
+fn wiki_table_ranges(input: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    let mut pos = 0;
+    while pos < input.len() {
+        if depth == 0 {
+            if let Some((name, length)) = html_policy::wiki_fragment(&input[pos..]) {
+                if html_policy::is_block(&name) {
+                    let end = pos + length;
+                    pos = input[end..].find('\n').map_or(input.len(), |i| end + i + 1);
+                    continue;
+                }
+            }
+        }
+        let length = input[pos..].find('\n').map_or(input.len() - pos, |i| i + 1);
+        let line = &input[pos..pos + length];
+        let trimmed = line.trim_start();
+        if (depth == 0 && line.starts_with("{|")) || (depth > 0 && trimmed.starts_with("{|")) {
+            if depth == 0 {
+                start = pos;
+            }
+            depth += 1;
+        } else if trimmed.starts_with("|}") && depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                ranges.push(start..pos + line.len());
+            }
+        }
+        pos += length;
+    }
+    if depth > 0 {
+        ranges.push(start..input.len());
+    }
+    ranges
+}
+
+fn table_delimiter(input: &str, span: &Range<usize>) -> bool {
+    let start = input[..span.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = input[span.end..]
+        .find('\n')
+        .map_or(input.len(), |i| span.end + i);
+    let line = &input[start..end];
+    let fragment = &input[span.clone()];
+    if line.starts_with("{|") || line.starts_with("|-") {
+        return true;
+    }
+    if line.starts_with('|') || line.starts_with('!') {
+        return fragment.contains('|') || line[span.end - start..].contains('|');
+    }
+    false
+}
+
+fn heading_delimiter(input: &str, span: &Range<usize>) -> bool {
+    let start = input[..span.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = input[span.end..]
+        .find('\n')
+        .map_or(input.len(), |i| span.end + i);
+    let line = input[start..end].trim_end();
+    let Some((level, _)) = heading(line) else {
+        return false;
+    };
+    let level = usize::from(level);
+    span.start < start + level || span.end > start + line.len() - level
 }
 
 fn is_line_aligned(input: &str, span: &Range<usize>) -> bool {

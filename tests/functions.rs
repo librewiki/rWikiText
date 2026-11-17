@@ -13,6 +13,9 @@ impl WikiData for Data {
     }
 
     fn file_info(&self, title: &str) -> Result<Option<rwikitext::FileInfo>, LookupError> {
+        if title == "File:Failure.jpg" {
+            return Err(LookupError::new("file offline"));
+        }
         Ok((title == "File:Foobar.jpg").then(|| rwikitext::FileInfo {
             url: "https://example.org/Foobar.jpg".into(),
             width: None,
@@ -53,6 +56,67 @@ fn context_and_core_functions() {
         "{output}"
     );
 }
+
+#[test]
+fn title_magic_word_requires_colon_for_explicit_title() {
+    struct Templates;
+    impl WikiData for Templates {
+        fn template_text(&self, title: &str) -> Result<Option<String>, LookupError> {
+            Ok((title == "Template:PAGENAME").then(|| "template".into()))
+        }
+    }
+    let result = convert_with_options(
+        ConversionRequest {
+            source: Format::Wikitext,
+            target: Format::Html,
+            input: "{{PAGENAME|foo}} / {{PAGENAME:foo}} / {{PAGENAME}}",
+            context: &WikiContext {
+                page_title: "Current",
+                ..WikiContext::default()
+            },
+        },
+        ConversionOptions {
+            wiki_data: Some(&Templates),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let text = scraper::Html::parse_fragment(&result.content)
+        .root_element()
+        .text()
+        .collect::<String>();
+    assert_eq!(text, "template / Foo / Current");
+}
+
+#[test]
+fn inline_equals_keeps_metadata_in_preformatted_text_and_table_cells() {
+    for input in [
+        " {|\nnormal {{=}} value",
+        "<pre>\n{|\n</pre>\n{{=}} stays literal here",
+        "{|\n| data {{=}} value\n|}",
+    ] {
+        let result = convert_with_options(
+            ConversionRequest {
+                source: Format::Wikitext,
+                target: Format::Html,
+                input,
+                context: &WikiContext::default(),
+            },
+            ConversionOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            result.diagnostics.is_empty(),
+            "{input}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.content.contains("mw:Transclusion"),
+            "{}",
+            result.content
+        );
+    }
+}
 #[test]
 fn branches_are_lazy_and_nested() {
     let output = run("{{#if:{{#ifeq:01|1|yes|no}}|{{#ifexist:Present|ok|wrong}}|{{#ifexist:Failure|bad|bad}}}} {{#switch:b|a|b=hit|#default=miss}}").unwrap();
@@ -67,6 +131,47 @@ fn branches_are_lazy_and_nested() {
         .unwrap()
         .contains("first"));
 }
+
+#[test]
+fn conditional_file_lookup_error_points_to_the_invocation() {
+    let call = "{{#ifexist:Media:Failure.jpg|found|missing}}";
+    let input = format!("앞 {call}");
+    let error = run(&input).unwrap_err();
+    let [diagnostic] = error.diagnostics() else {
+        panic!("expected one wiki lookup error, got {error:?}")
+    };
+    assert_eq!(diagnostic.kind, DiagnosticKind::WikiLookup);
+    assert_eq!(&input[diagnostic.span.clone()], call);
+    assert!(diagnostic.message.contains("File:Failure.jpg"));
+    assert!(diagnostic.message.contains("file offline"));
+}
+
+#[test]
+fn utc_weekday_and_iso_week_follow_the_calendar_year_boundary() {
+    for (reference_time, expected) in [
+        ("2021-01-01T00:00:00Z", "5 53"),
+        ("2021-01-04T00:00:00Z", "1 1"),
+        ("2023-01-01T00:00:00Z", "0 52"),
+        ("2000-02-29T00:00:00Z", "2 9"),
+    ] {
+        let result = convert_with_options(
+            ConversionRequest {
+                source: Format::Wikitext,
+                target: Format::Gfm,
+                input: "{{CURRENTDOW}} {{CURRENTWEEK}}",
+                context: &WikiContext {
+                    reference_time,
+                    ..WikiContext::default()
+                },
+            },
+            ConversionOptions::default(),
+        )
+        .unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.content, expected, "{reference_time}");
+    }
+}
+
 #[test]
 #[ignore = "requires scripts/fetch-compatibility.py"]
 fn pinned_magic_word_cases() {

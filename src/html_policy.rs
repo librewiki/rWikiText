@@ -91,6 +91,38 @@ const RAW: &[&str] = &[
 pub(crate) fn is_inert_html(name: &str) -> bool {
     RAW.contains(&name) || name == "template"
 }
+
+// Unknown tags in wikitext are displayed as literal text by MediaWiki. Only
+// report an HTML removal for names that correspond to recognizable HTML.
+fn is_html_element(name: &str) -> bool {
+    WIKI_TAGS.contains(&name)
+        || IMPORT_TAGS.contains(&name)
+        || is_inert_html(name)
+        || matches!(
+            name,
+            "area"
+                | "audio"
+                | "base"
+                | "button"
+                | "canvas"
+                | "embed"
+                | "form"
+                | "frame"
+                | "frameset"
+                | "head"
+                | "html"
+                | "input"
+                | "label"
+                | "math"
+                | "object"
+                | "option"
+                | "select"
+                | "source"
+                | "svg"
+                | "track"
+                | "video"
+        )
+}
 const GLOBAL: &[&str] = &[
     "id",
     "class",
@@ -665,7 +697,9 @@ fn sanitize_token(
         if wikitext {
             output.push_str(&html_escape::encode_text(&rest[..end]));
         }
-        if wikitext || !token.closing && !matches!(name, "html" | "head" | "body") {
+        if (wikitext && is_html_element(name))
+            || (!wikitext && !token.closing && !matches!(name, "html" | "head" | "body"))
+        {
             let kind = if !wikitext && !matches!(name, "script" | "style" | "title" | "base") {
                 DiagnosticKind::ConversionLoss
             } else {

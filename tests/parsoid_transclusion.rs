@@ -71,6 +71,10 @@ fn invalid_metadata_cannot_inject_wikitext() {
         r#"{not json}"#,
         r#"{"parts":[{"template":{"target":{"wt":"Message","href":"./Template:Message"},"params":{"1":{"wt":"value}}[[Category:Injected]]{{Message"}},"i":0}}]}"#,
         r#"{"parts":[{"template":{"target":{"wt":"Message","href":"javascript:alert(1)"},"params":{},"i":0}}]}"#,
+        r#"{"parts":[{"template":{"target":{"wt":"Message","href":"./Template:Message"},"params":{"x":{"wt":"value","key":{"wt":"x<!--"}}},"i":0}}]}"#,
+        r#"{"parts":[{"template":{"target":{"wt":"Message","href":"./Template:Message"},"params":{"x":{"wt":"value-->","key":{"wt":"x<!--"}}},"i":0}}]}"#,
+        r#"{"parts":[{"template":{"target":{"wt":"Message","href":"./Template:Message"},"params":{"x":{"wt":"-->wrong=payload","key":{"wt":"x<!--"}}},"i":0}}]}"#,
+        r#"{"parts":[{"template":{"target":{"wt":"Message","href":"./Template:Message"},"params":{"x":{"wt":"value","key":{"wt":"x<!--"}},"y":{"wt":"-->wrong"}},"i":0}}]}"#,
     ] {
         let input = format!("<p>Safe <span about=\"#mwt1\" typeof=\"mw:Transclusion\" data-mw='{}'>visible</span>.</p>", metadata);
         let result = convert(Format::Html, Format::Wikitext, &input);
