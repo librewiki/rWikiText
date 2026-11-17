@@ -65,24 +65,52 @@ fn children(parent: ElementRef<'_>, output: &mut String, at_block_boundary: &mut
                 if node
                     .attr("rel")
                     .is_some_and(|rel| rel.starts_with("mw:PageProp/"))
+                    || node.name() == "meta"
+                        && (node
+                            .attr("property")
+                            .is_some_and(|prop| prop.starts_with("mw:PageProp/"))
+                            || node
+                                .attr("typeof")
+                                .is_some_and(|types| types.contains("mw:Includes/")))
+                    || node
+                        .attr("class")
+                        .is_some_and(|c| c.split_whitespace().any(|k| k == "mw-editsection"))
                 {
                     continue;
                 }
                 let element = ElementRef::wrap(child).unwrap();
+                if node.name() == "span"
+                    && element.children().next().is_none()
+                    && (node.attr("typeof") == Some("mw:FallbackId")
+                        || node.attrs().all(|(name, _)| name == "id"))
+                {
+                    continue;
+                }
                 // The GFM renderer supplies a header group for a simple table.
-                let table_group = matches!(node.name(), "thead" | "tbody");
+                let table_group = matches!(node.name(), "thead" | "tbody" | "section")
+                    || (node.name() == "div"
+                        && node
+                            .attr("class")
+                            .is_some_and(|c| c.split_whitespace().any(|k| k == "mw-heading")));
                 let wrapper = node.name() == "span"
-                    && (node
-                        .attr("about")
-                        .is_some_and(|about| about.starts_with("#mwt"))
-                        || node.attr("typeof").is_some_and(|types| {
-                            types.split_whitespace().any(|kind| {
-                                matches!(kind, "mw:Transclusion" | "mw:Nowiki" | "mw:Entity")
-                            })
-                        }))
-                    && node.attrs().all(|(name, _)| {
-                        matches!(name, "about" | "typeof" | "data-mw" | "data-parsoid")
-                    });
+                    && (node.attrs().next().is_none()
+                        || (node
+                            .attr("about")
+                            .is_some_and(|about| about.starts_with("#mwt"))
+                            || node.attr("typeof").is_some_and(|types| {
+                                types.split_whitespace().any(|kind| {
+                                    matches!(
+                                        kind,
+                                        "mw:Transclusion"
+                                            | "mw:Nowiki"
+                                            | "mw:Entity"
+                                            | "mw:DisplaySpace"
+                                    )
+                                })
+                            }))
+                            && node.attrs().all(|(name, _)| {
+                                matches!(name, "about" | "typeof" | "data-mw" | "data-parsoid")
+                            }));
                 if table_group || wrapper {
                     children(element, output, at_block_boundary, pre);
                     continue;
@@ -126,6 +154,9 @@ fn children(parent: ElementRef<'_>, output: &mut String, at_block_boundary: &mut
                 let in_pre = pre || name == "pre";
                 let mut child_boundary = block || *at_block_boundary;
                 children(element, output, &mut child_boundary, in_pre);
+                if name == "pre" && output.ends_with('\n') {
+                    output.pop();
+                }
                 if block && !in_pre {
                     trim_space(output);
                 }

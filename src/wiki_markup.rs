@@ -48,14 +48,14 @@ impl Markup {
     ) {
         let open = self.token(block);
         let start = if block {
-            format!("{open}\n")
+            format!("\n{open}\n")
         } else {
             open.clone()
         };
         self.changes.push((range.start..range.start, start));
         let close = self.token(block);
         let end = if block {
-            format!("\n{close}")
+            format!("\n{close}\n")
         } else {
             close.clone()
         };

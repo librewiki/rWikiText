@@ -78,7 +78,27 @@ fn article_title(source: &str) -> String {
         .trim()
         .split_once(':')
         .map_or((String::new(), source.trim()), |(ns, title)| {
-            (format!("{ns}:"), title.trim())
+            let normalized_ns = match ns.trim().replace(' ', "_").to_ascii_lowercase().as_str() {
+                "media" => "Media".into(),
+                "special" => "Special".into(),
+                "talk" => "Talk".into(),
+                "user" => "User".into(),
+                "user_talk" => "User_talk".into(),
+                "project" => "Project".into(),
+                "project_talk" => "Project_talk".into(),
+                "mediawiki" => "MediaWiki".into(),
+                "mediawiki_talk" => "MediaWiki_talk".into(),
+                "template" => "Template".into(),
+                "template_talk" => "Template_talk".into(),
+                "help" => "Help".into(),
+                "help_talk" => "Help_talk".into(),
+                "file" | "image" => "File".into(),
+                "file_talk" | "image_talk" => "File_talk".into(),
+                "category" => "Category".into(),
+                "category_talk" => "Category_talk".into(),
+                _ => ns.trim().replace(' ', "_"),
+            };
+            (format!("{normalized_ns}:"), title.trim())
         });
     let mut letters = title.chars();
     let initial = letters.next().into_iter().flat_map(char::to_uppercase);
@@ -283,7 +303,41 @@ fn unusual_parameter_keys_and_brace_precedence() {
     );
     check_cases(
         "tests/parser/preprocessor.txt",
-        &["Preprocessor precedence 5: tplarg takes precedence over template"],
+        &[
+            "Preprocessor precedence 1: link is rightmost opening",
+            "Preprocessor precedence 5: tplarg takes precedence over template",
+            "Preprocessor precedence 9: groups of braces",
+            "Preprocessor precedence 11: found during visual diff testing",
+        ],
+    );
+    let source = read_fixture("tests/parser/preprocessor.txt");
+    let wiki = Fixture::parse(&source);
+    let title = "Preprocessor precedence 6: broken link is rightmost opening";
+    let case = wiki.case(title);
+    let actual = rendered(case, title, &wiki);
+    assert_eq!(
+        document_structure(&actual.content),
+        document_structure(expected_html(case))
+    );
+    let input = section(case, "wikitext").unwrap();
+    let losses: Vec<_> = actual
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(diagnostic.kind, DiagnosticKind::ConversionLoss);
+            &input[diagnostic.span.clone()]
+        })
+        .collect();
+    assert_eq!(losses, ["{{1x|[[Foo}}", "{{1x|[[Foo|bar|bat=baz}}"]);
+    check_cases(
+        CORE_CASES,
+        &[
+            "Include directive string gluing",
+            "1. Include directive in template target",
+            "2. Include directive in template target",
+            "3. Include directive in template target",
+            "4. Include directive in template target",
+        ],
     );
 }
 
@@ -426,6 +480,7 @@ fn core_tag_function_handles_nowiki_and_pre() {
             "Extension tags in extension content: <nowiki>",
             "Extension tags in extension content: <pre>",
             "Extension tags in extension attributes: <pre>",
+            "Extension tags in extension attributes: bogus tag name",
             "Extension tags in extension name",
             "Doubly-nested tags",
         ],
@@ -438,9 +493,37 @@ fn wiki_context_controls_language_sensitive_functions() {
     check_cases(
         MAGIC_WORDS,
         &[
+            "Magic Word: {{TALKSPACE}}",
+            "Magic Word: {{TALKSPACE}}, same namespace",
+            "Magic Word: {{TALKSPACE}}, main namespace",
+            "Magic Word: {{TALKSPACEE}}",
+            "Magic Word: {{SUBJECTSPACE}}",
+            "Magic Word: {{SUBJECTSPACE}}, same namespace",
+            "Magic Word: {{SUBJECTSPACE}}, main namespace",
+            "Magic Word: {{SUBJECTSPACEE}}",
             "Magic Word: {{NAMESPACE}}",
+            "Magic Word: {{NAMESPACEE}}",
+            "Magic Word: {{NAMESPACENUMBER}}",
+            "Magic Word: {{SUBPAGENAME}}",
+            "Magic Word: {{SUBPAGENAMEE}}",
+            "Magic Word: {{ROOTPAGENAME}}",
+            "Magic Word: {{ROOTPAGENAMEE}}",
+            "Magic Word: {{BASEPAGENAME}}",
+            "Magic Word: {{BASEPAGENAMEE}}",
+            "Magic Word: {{TALKPAGENAME}}",
+            "Magic Word: {{TALKPAGENAMEE}}",
+            "Magic Word: {{SUBJECTPAGENAME}}",
+            "Magic Word: {{SUBJECTPAGENAMEE}}",
+            "Magic Word: {{PAGENAME}}",
+            "Magic Word: {{PAGENAME}} with metacharacters",
+            "Magic Word: {{PAGENAME}} with metacharacters (T28781)",
+            "Magic Word: {{PAGENAMEE}}",
+            "Magic Word: {{PAGENAMEE}} with metacharacters (T28781)",
+            "Magic Word: {{FULLPAGENAME}}",
+            "Magic Word: {{FULLPAGENAMEE}}",
             "Magic Word: {{PAGELANGUAGE}}",
             "Magic Word: {{PAGELANGUAGE}} on a page with no explicitly set language",
+            "Case-sensitive magic words, when cased differently, should just be template transclusions",
         ],
     );
     check_cases(
@@ -448,6 +531,90 @@ fn wiki_context_controls_language_sensitive_functions() {
         &[
             "T33490 Turkish: ucfirst 'blah'",
             "T33490 Turkish: lcfirst 'BLAH'",
+            "Namespace 1 {{ns:1}}",
+            "Namespace 1 {{ns:01}}",
+            "Namespace 0 {{ns:0}} (T6783)",
+            "Namespace 0 {{ns:00}} (T6783)",
+            "Namespace -1 {{ns:-1}}",
+            "Namespace User {{ns:User}}",
+            "Namespace User talk {{ns:User_talk}}",
+            "Namespace User talk {{ns:uSeR tAlK}}",
+            "Namespace File {{ns:File}}",
+            "Namespace File {{ns:Image}}",
+            "Urlencode",
+            "Strip marker in urlencode",
+            "Strip marker in lc",
+            "Strip marker in uc",
+            "anchorencode",
+            "anchorencode trims spaces",
+            "anchorencode deals with links",
+            "anchorencode deals with templates",
+            "Strip marker in anchorencode",
+            "Namespaced link must have a title",
+            "Namespaced link must have a title (bad fragment version)",
+            "Nowikis can be considered pwrap optional based on content",
+            "Entities inside <nowiki>",
+            "Link with space in namespace",
+            "Templates: Parameters substituted at the top-level",
+            "Parsoid: Serialize link to category page with colon escape",
+            "Fuzz testing: URL adjacent extension (no space, dirty; nowiki)",
+            "WTS of autolinks with nowikis (round-trip)",
+        ],
+    );
+    check_cases(
+        "tests/parser/definitionLists.txt",
+        &[
+            "Definition list with URL link",
+            "Definition list with bracketed URL link",
+            "Definition list with news link containing colon",
+            "Malformed definition list with colon",
+            "Definition lists: colon in external link text",
+            "Definition lists: colon in HTML attribute",
+            "Second colon on line: No templates involved",
+        ],
+    );
+    check_cases(
+        "tests/parser/redirects.txt",
+        &["Redirect wikitext become ol list items when they come from a template"],
+    );
+    check_cases(
+        "tests/parser/pst.txt",
+        &["Parsoid: Recognize nowiki with trailing space in tags"],
+    );
+    let source = read_fixture(CORE_CASES);
+    let wiki = Fixture::parse(&source);
+    let title = "Non extlink in wikilink";
+    let case = wiki.case(title);
+    let actual = rendered(case, title, &wiki);
+    assert_eq!(
+        document_structure(&actual.content),
+        document_structure(expected_html(case))
+    );
+    let input = section(case, "wikitext").unwrap();
+    let losses: Vec<_> = actual
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(diagnostic.kind, DiagnosticKind::ConversionLoss);
+            &input[diagnostic.span.clone()]
+        })
+        .collect();
+    assert_eq!(losses, ["{{1x|123}}"]);
+    check_cases(
+        "tests/parser/comments.txt",
+        &[
+            "Comment on its own line post-expand",
+            "Comment on its own line post-expand with non-significant whitespace",
+        ],
+    );
+    check_cases(
+        "tests/parser/quotes.txt",
+        &[
+            "Italics and bold: 4-quote opening sequence: (4,4) w/ nowiki",
+            "Italics and bold: multiple quote sequences: (2,4,2+3) w/ nowiki",
+            "Italics and bold: multiple quote sequences: (2,4,3+2) w/ nowiki",
+            "Italics and bold: multiple quote sequences: (2,4,4+2) w/ nowiki",
+            "Italics and bold: other quote tests: (3,2,3+2+2,2)",
         ],
     );
 }
@@ -458,6 +625,7 @@ fn reference_time_controls_utc_weekday_and_week() {
     check_cases(
         MAGIC_WORDS,
         &[
+            "Magic Words LOCAL (UTC)",
             "Magic Word: {{CURRENTDOW}}",
             "Magic Word: {{CURRENTWEEK}} (T6594)",
         ],

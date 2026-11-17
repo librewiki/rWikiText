@@ -43,7 +43,8 @@ fn display_valid(s: &str, ctx: &WikiContext<'_>) -> bool {
         return false;
     }
     if valid_title(s) {
-        return title(s) == title(ctx.page_title);
+        let plain = html_escape::decode_html_entities(s);
+        return valid_title(&plain) && title(&plain) == title(ctx.page_title);
     }
     // Admit one literal span with a color-only style; this subset has no
     // layout effects, template syntax, executable CSS, or nested elements.
@@ -183,17 +184,23 @@ pub(crate) fn redirect(input: &str) -> Option<(&str, usize)> {
 
 pub(crate) fn extract_wikitext(
     input: &str,
+    raw_input: &str,
     ctx: &WikiContext<'_>,
 ) -> Result<Extraction, ConversionError> {
     let mut e = empty();
     let mut ranges = Vec::new();
     let mut pos = 0;
-    // Redirect is a page directive only at the beginning of the document.
-    if let Some((target, stop)) = redirect(input) {
-        e.metadata.redirect_target = Some(title(target));
-        ranges.push((0, stop));
-        add(&mut e, 0, stop, "redirect");
-        pos = stop;
+    // Redirect is a page directive only at the beginning of the raw document.
+    if !raw_input
+        .trim_start_matches([' ', '\t', '\r', '\n'])
+        .starts_with("{{")
+    {
+        if let Some((target, stop)) = redirect(input) {
+            e.metadata.redirect_target = Some(title(target));
+            ranges.push((0, stop));
+            add(&mut e, 0, stop, "redirect");
+            pos = stop;
+        }
     }
     while pos < input.len() {
         let rest = &input[pos..];
@@ -209,15 +216,20 @@ pub(crate) fn extract_wikitext(
                 let tag = rest[..n].to_ascii_lowercase();
                 if ["script", "style", "nowiki", "pre"].iter().any(|name| {
                     tag.strip_prefix(&format!("<{name}"))
-                        .is_some_and(|tail| tail.starts_with([' ', '\t', '\r', '\n', '>']))
+                        .is_some_and(|tail| {
+                            tail.starts_with([' ', '\t', '\r', '\n', '>']) || tail == "/>"
+                        })
                 }) {
+                    if tag.ends_with("/>") {
+                        pos += n;
+                        continue;
+                    }
                     let name = tag[1..]
                         .split(|c: char| c.is_ascii_whitespace() || c == '>')
                         .next()
                         .unwrap();
-                    let closing = format!("</{name}>");
-                    if let Some(offset) = rest[n..].to_ascii_lowercase().find(&closing) {
-                        pos += n + offset + closing.len();
+                    if let Some((_, close_end)) = crate::html_policy::raw_close(&rest[n..], name) {
+                        pos += n + close_end;
                         continue;
                     }
                     break;

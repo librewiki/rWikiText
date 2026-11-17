@@ -19,6 +19,11 @@ impl WikiData for Data {
             "Template:Big" => Ok(Some("Ω界".into())),
             "Template:One" => Ok(Some("1".into())),
             "Template:1x" => Ok(Some("{{{1}}}".into())),
+            "Template:Blank" => Ok(Some(String::new())),
+            "Template:Bullet" => Ok(Some("*Bar".into())),
+            "Template:Preprocessor_precedence_9" => Ok(Some(
+                ";4: {{{{1}}}}\n;5: {{{{{2}}}}}\n;6: {{{{{{3}}}}}}\n;7: {{{{{{{4}}}}}}}".into(),
+            )),
             "Template:Table" => Ok(Some("{|\n| 1 || 2\n|-\n| 3 || 4\n|}".into())),
             "Template:Mixed_name" => Ok(Some("normalized".into())),
             "Template:Unused" => Ok(Some("good".into())),
@@ -572,4 +577,169 @@ fn self_closed_inclusion_controls_are_empty() {
     .unwrap();
     assert_eq!(body(&output.content), "abcd");
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+}
+
+#[test]
+fn unterminated_link_allows_template_list_expansion() {
+    let result = run(
+        "before [[unterminated {{1x|*Text}}",
+        &Data::default(),
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    let document = scraper::Html::parse_fragment(&result.content);
+    let paragraph = scraper::Selector::parse("p").unwrap();
+    let item = scraper::Selector::parse("ul > li").unwrap();
+    assert_eq!(
+        document
+            .select(&paragraph)
+            .map(|p| p.text().collect::<String>().trim().to_owned())
+            .collect::<Vec<_>>(),
+        ["before [[unterminated"]
+    );
+    assert_eq!(
+        document
+            .select(&item)
+            .map(|li| li.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["Text"]
+    );
+}
+
+#[test]
+fn preprocessor_brace_groups_unclosed_links_and_inclusion_in_templates() {
+    let data = Data::default();
+    let unclosed = run(
+        "{{1x|[[Foo}}\n\n{{1x|[[Foo|bar|bat=baz}}",
+        &data,
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    let doc = scraper::Html::parse_fragment(&unclosed.content);
+    let paragraphs = scraper::Selector::parse("p").unwrap();
+    assert_eq!(
+        doc.select(&paragraphs)
+            .map(|p| p.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["{{1x|[[Foo}}", "{{1x|[[Foo|bar|bat=baz}}"]
+    );
+
+    let braces = run(
+        "{{Preprocessor precedence 9|Four|Bullet|1|2}}",
+        &data,
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    let doc = scraper::Html::parse_fragment(&braces.content);
+    let dds = scraper::Selector::parse("dd").unwrap();
+    let lis = scraper::Selector::parse("ul > li").unwrap();
+    assert_eq!(
+        doc.select(&dds)
+            .map(|dd| dd.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["{Four}", "", "Four", "{Bullet}"]
+    );
+    assert_eq!(
+        doc.select(&lis)
+            .map(|li| li.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["Bar"]
+    );
+
+    for (input, expected) in [
+        ("<noinclude>{{1x|</noinclude>testing<noinclude>}}</noinclude>", "testing"),
+        ("{{1x<noinclude>|123</noinclude>}}", "123"),
+        ("{{1x<includeonly>|123</includeonly>|345}}", "345"),
+        ("{{1x<onlyinclude>|123</onlyinclude>}}", "123"),
+        ("{{{{{1<noinclude>|1x</noinclude>}}}|123}}", "123"),
+    ] {
+        let result = run(input, &data, ExpansionLimits::default()).unwrap();
+        assert_eq!(body(&result.content).trim(), expected, "{input}");
+    }
+}
+
+#[test]
+fn comment_only_line_post_expand_and_self_closing_nowiki_tokens() {
+    let data = Data::default();
+    for input in ["a\n{{blank}}<!---->\nb", "a\n {{blank}} <!----> \nb"] {
+        let result = run(input, &data, ExpansionLimits::default()).unwrap();
+        let doc = scraper::Html::parse_fragment(&result.content);
+        let paragraphs = scraper::Selector::parse("p").unwrap();
+        assert_eq!(
+            doc.select(&paragraphs)
+                .map(|p| p.text().collect::<String>().trim().to_owned())
+                .collect::<Vec<_>>(),
+            ["a", "b"],
+            "{input}"
+        );
+    }
+
+    let category_div = run(
+        "{{1x|<nowiki />[[category:123]]<div>123</div>}}",
+        &data,
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(category_div.metadata.categories, ["123"]);
+    let doc = scraper::Html::parse_fragment(&category_div.content);
+    let divs = scraper::Selector::parse("div").unwrap();
+    assert_eq!(
+        doc.select(&divs)
+            .map(|d| d.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        ["123"]
+    );
+
+    let quotes_and_links = run(
+        "'<nowiki/>'''foo''''\n\n'''this is about ''foo'''''<nowiki/>''s family''\n\n[[Example|[<nowiki/>]]\n\n[[Project:]] [[Project:#fragment]]",
+        &data,
+        ExpansionLimits::default(),
+    )
+    .unwrap();
+    assert!(
+        quotes_and_links.content.contains("'<b>foo'</b>"),
+        "{}",
+        quotes_and_links.content
+    );
+    assert!(
+        quotes_and_links
+            .content
+            .contains("<b>this is about <i>foo</i></b><i>s family</i>"),
+        "{}",
+        quotes_and_links.content
+    );
+    assert!(
+        quotes_and_links
+            .content
+            .contains("href=\"./Example?action=edit&amp;redlink=1\""),
+        "{}",
+        quotes_and_links.content
+    );
+    assert!(
+        quotes_and_links.content.contains(">[</a>"),
+        "{}",
+        quotes_and_links.content
+    );
+    assert!(
+        quotes_and_links
+            .content
+            .contains("[[Project:]] [[Project:#fragment]]"),
+        "{}",
+        quotes_and_links.content
+    );
+
+    let display = convert_with_options(
+        ConversionRequest {
+            source: Format::Wikitext,
+            target: Format::Html,
+            input: "{{DISPLAYTITLE:art&amp;copy}}body",
+            context: &WikiContext {
+                page_title: "Art&copy",
+                ..WikiContext::default()
+            },
+        },
+        ConversionOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(display.metadata.display_title.as_deref(), Some("art&amp;copy"));
 }

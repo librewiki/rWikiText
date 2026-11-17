@@ -134,7 +134,7 @@ pub(crate) fn internal_href(target: &str) -> Result<String, ConversionError> {
         None => (target, None),
     };
     let title = normalize_title(title.strip_prefix(':').unwrap_or(title));
-    if title.is_empty() && fragment.is_none() {
+    if (title.is_empty() && fragment.is_none()) || title.ends_with(':') {
         return Err(ConversionError::new("empty internal link target"));
     }
     let mut href = if title.is_empty() {
@@ -205,10 +205,11 @@ fn bare_external(input: &str, position: usize) -> Option<(&str, String)> {
             && suffix
                 .get(..prefix.len())
                 .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-    }) || input[..position]
-        .chars()
-        .next_back()
-        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    }) || (!input[..position].ends_with("<nowiki/>")
+        && input[..position]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_'))
     {
         return None;
     }
@@ -297,7 +298,7 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
                     (target, label)
                 }
                 Some(_) => return Err(ConversionError::new("unsupported wikilink label")),
-                None => (link, link),
+                None => (link, link.trim_start().strip_prefix(':').unwrap_or(link)),
             };
             let target = decoded(target);
             let href = match internal_href(&target) {
@@ -377,7 +378,11 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
             if literal > 0 {
                 text(&mut out, &"'".repeat(literal));
             }
-            let mut previous = input[..pos + literal].chars().rev();
+            let mut previous = input[..pos + literal]
+                .strip_suffix("<nowiki/>")
+                .unwrap_or(&input[..pos + literal])
+                .chars()
+                .rev();
             parts.push(QuotePart::Content(std::mem::take(&mut out)));
             parts.push(QuotePart::Quote {
                 width,
@@ -385,6 +390,9 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
                 before_previous: previous.next(),
             });
             pos += count;
+        } else if rest.starts_with("<nowiki/>") {
+            pos += 9;
+            continue;
         } else if let Some((_, end)) = crate::html_policy::wiki_fragment(rest) {
             out.push(Inline::Html(crate::embedded_html(&rest[..end], language)));
             pos += end;
@@ -400,7 +408,7 @@ fn parse_line(input: &str, language: &str, links: bool) -> Result<Vec<Inline>, C
             pos += source.len();
         } else {
             let ch = rest.chars().next().unwrap();
-            if rest.starts_with("{{") || rest.starts_with("''") || ch == '<' {
+            if rest.starts_with("''") || ch == '<' {
                 return Err(ConversionError::new("unsupported wikitext syntax"));
             }
             pos += ch.len_utf8();

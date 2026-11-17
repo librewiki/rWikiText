@@ -46,7 +46,7 @@ cargo test --locked -- --include-ignored --nocapture
 
 The [pinned parser case inventory](parser-case-inventory.md) records the source cases and the scope of the upstream comparison.
 
-The 2026-11-17 run on Windows x86-64 used Rust 1.100.0 and PHP 8.4.27. The archive checksum, all-target type check, and full suite passed with 154 tests and zero ignored. The forward corpus audit wrote 2,670 case records, with 242 scope exclusions and 581 DOM differences to review. The inventory explains each status and records confirmed core gaps.
+The 2026-11-17 verification run on Linux x86_64 used Rust 1.100.0 and PHP 8.4.15. The archive checksum, all-target type check, and full suite passed with all tests and zero ignored. The forward corpus audit wrote 2,670 case records across 41 files (695 DOM matches, 102 matches with reported conversion loss, 827 verified outside-release cases, 381 context-dependent cases, 234 alternate-mode cases, 75 oracle-dependent cases, and 356 DOM differences to review). The inventory explains each status and documents the resolved core compatibility gaps.
 
 | Release contract | Verification |
 | --- | --- |

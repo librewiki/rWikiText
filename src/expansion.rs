@@ -207,46 +207,47 @@ impl Engine<'_, '_> {
         }
         Ok(())
     }
-    fn top(&mut self, input: &str, out: &mut Expansion) -> Result<(), ConversionError> {
+    fn top(&mut self, raw_input: &str, out: &mut Expansion) -> Result<(), ConversionError> {
+        let (cleaned, page_removals) = strip_page_inclusion(raw_input);
+        let input = cleaned.as_str();
+        let map_range = |span: Range<usize>| -> Range<usize> {
+            let mut start = span.start;
+            let mut end = span.end;
+            for removal in &page_removals {
+                if removal.start <= start {
+                    start += removal.len();
+                }
+                if removal.start < end {
+                    end += removal.len();
+                }
+            }
+            start..end.max(start)
+        };
         let no_params = Rc::new(Params::new());
         let mut pos = 0;
         let mut lexical = LexicalContext::default();
         while pos < input.len() {
             let tail = &input[pos..];
             if let Some(n) = literal_len(tail) {
-                self.append(out, &tail[..n], pos..pos + n, true)?;
+                self.append(out, &tail[..n], map_range(pos..pos + n), true)?;
                 lexical.bracket = None;
                 pos += n;
                 continue;
             }
-            if let Some(n) = self_closed_include(tail) {
-                pos += n;
-                continue;
-            }
-            if starts_ci(tail, "<includeonly>") {
-                pos += "<includeonly>".len();
-                pos = find_ci(&input[pos..], "</includeonly>")
-                    .map_or(input.len(), |n| pos + n + "</includeonly>".len());
-                continue;
-            }
-            if let Some(tag) = [
-                "<noinclude>",
-                "</noinclude>",
-                "<onlyinclude>",
-                "</onlyinclude>",
-            ]
-            .into_iter()
-            .find(|t| starts_ci(tail, t))
-            {
-                pos += tag.len();
-                continue;
-            }
             if tail.starts_with("{{") {
-                if let Some(n) = construct_end(tail) {
-                    let source = pos..pos + n;
+                if let Some((lead, _, n)) = construct_span(tail) {
+                    if lead > 0 {
+                        self.append(out, &tail[..lead], map_range(pos..pos + lead), true)?;
+                        lexical.advance(&tail[..lead]);
+                        pos += lead;
+                        continue;
+                    }
+                    let source = map_range(pos..pos + n);
                     let (value, call) =
                         self.construct(&tail[..n], &no_params, 0, source.clone())?;
-                    if needs_implicit_newline(&out.text, &value) && lexical.allows_block() {
+                    if needs_implicit_newline(&out.text, &value)
+                        && lexical.allows_block(&tail[n..])
+                    {
                         self.append(out, "\n", source.clone(), false)?;
                     }
                     let start = out.text.len();
@@ -265,11 +266,14 @@ impl Engine<'_, '_> {
                     pos += n;
                     continue;
                 }
-                self.append(out, tail, pos..input.len(), true)?;
-                break;
+                let k = tail.bytes().take_while(|&b| b == b'{').count();
+                self.append(out, &tail[..k], map_range(pos..pos + k), true)?;
+                lexical.advance(&tail[..k]);
+                pos += k;
+                continue;
             }
             let n = tail.chars().next().unwrap().len_utf8();
-            self.append(out, &tail[..n], pos..pos + n, true)?;
+            self.append(out, &tail[..n], map_range(pos..pos + n), true)?;
             lexical.advance(&tail[..n]);
             pos += n;
         }
@@ -288,24 +292,31 @@ impl Engine<'_, '_> {
         let mut lexical = LexicalContext::default();
         while pos < input.len() {
             let tail = &input[pos..];
+            let mut is_construct = false;
             let (mut part, n) = if let Some(n) = literal_len(tail) {
                 (tail[..n].to_owned(), n)
             } else if tail.starts_with("{{") {
-                if let Some(n) = construct_end(tail) {
-                    (
-                        self.construct(&tail[..n], params, depth, source.clone())?.0,
-                        n,
-                    )
+                if let Some((lead, _, n)) = construct_span(tail) {
+                    if lead > 0 {
+                        (tail[..lead].to_owned(), lead)
+                    } else {
+                        is_construct = true;
+                        (
+                            self.construct(&tail[..n], params, depth, source.clone())?.0,
+                            n,
+                        )
+                    }
                 } else {
-                    (tail.to_owned(), tail.len())
+                    let k = tail.bytes().take_while(|&b| b == b'{').count();
+                    (tail[..k].to_owned(), k)
                 }
             } else {
                 let n = tail.chars().next().unwrap().len_utf8();
                 (tail[..n].to_owned(), n)
             };
-            if tail.starts_with("{{")
+            if is_construct
                 && needs_implicit_newline(&out, &part)
-                && lexical.allows_block()
+                && lexical.allows_block(&tail[n..])
             {
                 part.insert(0, '\n');
             }
@@ -374,8 +385,15 @@ impl Engine<'_, '_> {
         ),
         ConversionError,
     > {
-        let parameter = input.starts_with("{{{") && !input.starts_with("{{{{");
-        let width = if parameter { 3 } else { 2 };
+        let width = construct_span(input).map_or(
+            if input.starts_with("{{{") && !input.starts_with("{{{{") {
+                3
+            } else {
+                2
+            },
+            |(_, w, _)| w,
+        );
+        let parameter = width == 3;
         let parts = split_top(&input[width..input.len() - width], '|');
         if parameter {
             let key = self.text(parts[0], params, depth, source.clone())?;
@@ -388,7 +406,7 @@ impl Engine<'_, '_> {
                     text
                 }
             } else if parts.len() > 1 {
-                self.text(&parts[1..].join("|"), params, depth, source)?
+                self.text(parts[1], params, depth, source)?
             } else {
                 crate::escape_wikitext(input)
             };
@@ -654,8 +672,11 @@ struct LexicalContext {
 }
 
 impl LexicalContext {
-    fn allows_block(&self) -> bool {
-        self.links == 0 && !self.external && !self.tag && !self.tag_pending
+    fn allows_block(&self, after: &str) -> bool {
+        !self.tag_pending
+            && (!self.tag || !after.contains('>'))
+            && (!self.external || !after.split('\n').next().unwrap_or("").contains(']'))
+            && (self.links == 0 || !after.contains("]]"))
     }
 
     fn advance(&mut self, mut text: &str) {
@@ -867,40 +888,70 @@ fn find_active_tag(input: &str, tag: &str) -> Option<usize> {
     }
     None
 }
+fn strip_page_inclusion(input: &str) -> (String, Vec<Range<usize>>) {
+    let mut cleaned = String::with_capacity(input.len());
+    let mut removed = Vec::new();
+    let mut pos = 0;
+    while pos < input.len() {
+        let tail = &input[pos..];
+        if let Some(n) = literal_len(tail) {
+            cleaned.push_str(&tail[..n]);
+            pos += n;
+            continue;
+        }
+        if let Some(n) = self_closed_include(tail) {
+            removed.push(pos..pos + n);
+            pos += n;
+            continue;
+        }
+        if starts_ci(tail, "<includeonly>") {
+            let start = pos + "<includeonly>".len();
+            let end = find_ci(&input[start..], "</includeonly>")
+                .map_or(input.len(), |n| start + n + "</includeonly>".len());
+            removed.push(pos..end);
+            pos = end;
+            continue;
+        }
+        if let Some(tag) = [
+            "<noinclude>",
+            "</noinclude>",
+            "<onlyinclude>",
+            "</onlyinclude>",
+        ]
+        .into_iter()
+        .find(|t| starts_ci(tail, t))
+        {
+            removed.push(pos..pos + tag.len());
+            pos += tag.len();
+            continue;
+        }
+        let n = tail.chars().next().unwrap().len_utf8();
+        cleaned.push_str(&tail[..n]);
+        pos += n;
+    }
+    (cleaned, removed)
+}
+
 pub(crate) fn split_top(input: &str, delimiter: char) -> Vec<&str> {
-    let (mut result, mut start, mut pos, mut braces, mut links) =
-        (Vec::new(), 0, 0, Vec::<usize>::new(), 0usize);
+    let (mut result, mut start, mut pos, mut links) = (Vec::new(), 0, 0, 0usize);
     while pos < input.len() {
         let tail = &input[pos..];
         if let Some(n) = literal_len(tail) {
             pos += n;
             continue;
         }
-        if tail.starts_with("{{") {
-            let n = if tail.starts_with("{{{") && !tail.starts_with("{{{{") {
-                3
-            } else {
-                2
-            };
-            braces.push(n);
-            pos += n;
-        } else if let Some(&n) = braces.last() {
-            if tail
-                .as_bytes()
-                .get(..n)
-                .is_some_and(|s| s.iter().all(|b| *b == b'}'))
-            {
-                braces.pop();
-                pos += n;
-            } else {
-                pos += tail.chars().next().unwrap().len_utf8();
-            }
-        } else if tail.starts_with("[[") {
+        if tail.starts_with("[[") {
             links += 1;
             pos += 2;
         } else if tail.starts_with("]]") && links > 0 {
             links -= 1;
             pos += 2;
+        } else if links == 0 && tail.starts_with("{{") {
+            if let Some((lead, _, end)) = construct_span(tail) {
+                pos += if lead > 0 { lead } else { end };
+            } else {
+                pos += tail.bytes().take_while(|&b| b == b'{').count();
+            }
         } else {
             let c = tail.chars().next().unwrap();
             if c == delimiter && links == 0 {
@@ -913,41 +964,78 @@ pub(crate) fn split_top(input: &str, delimiter: char) -> Vec<&str> {
     result.push(&input[start..]);
     result
 }
-pub(crate) fn construct_end(input: &str) -> Option<usize> {
-    let (mut stack, mut pos) = (Vec::<usize>::new(), 0);
+
+pub(crate) fn construct_span(input: &str) -> Option<(usize, usize, usize)> {
+    if !input.starts_with("{{") {
+        return None;
+    }
+    let k0 = input.bytes().take_while(|&b| b == b'{').count();
+    let mut stack = vec![(true, k0)];
+    let mut pos = k0;
+    let mut links = 0usize;
     while pos < input.len() {
         let tail = &input[pos..];
         if let Some(n) = literal_len(tail) {
             pos += n;
             continue;
         }
-        if tail.starts_with("{{") {
-            let n = if tail.starts_with("{{{") && !tail.starts_with("{{{{") {
-                3
-            } else {
-                2
-            };
-            stack.push(n);
-            pos += n;
-        } else if let Some(&n) = stack.last() {
-            if tail
-                .as_bytes()
-                .get(..n)
-                .is_some_and(|s| s.iter().all(|b| *b == b'}'))
-            {
-                stack.pop();
-                pos += n;
-                if stack.is_empty() {
-                    return Some(pos);
-                }
-            } else {
-                pos += tail.chars().next().unwrap().len_utf8();
-            }
-        } else {
-            return None;
+        if tail.starts_with("[[") {
+            links += 1;
+            pos += 2;
+            continue;
         }
+        if tail.starts_with("]]") && links > 0 {
+            links -= 1;
+            pos += 2;
+            continue;
+        }
+        if links > 0 {
+            pos += tail.chars().next().unwrap().len_utf8();
+            continue;
+        }
+        if tail.starts_with("{{") {
+            let k = tail.bytes().take_while(|&b| b == b'{').count();
+            stack.push((false, k));
+            pos += k;
+            continue;
+        }
+        if tail.starts_with("}}") {
+            let mut m = tail.bytes().take_while(|&b| b == b'}').count();
+            while m >= 2 {
+                let Some((is_root, open)) = stack.last_mut() else {
+                    return None;
+                };
+                if *open < 2 {
+                    if *is_root {
+                        return None;
+                    }
+                    stack.pop();
+                    continue;
+                }
+                let w = (*open).min(m).min(3);
+                *open -= w;
+                m -= w;
+                pos += w;
+                if *is_root {
+                    if *open < 2 {
+                        return Some((*open, w, pos));
+                    }
+                } else if *open == 0 {
+                    stack.pop();
+                }
+            }
+            if m > 0 {
+                pos += m;
+            }
+            continue;
+        }
+        pos += tail.chars().next().unwrap().len_utf8();
     }
     None
+}
+
+pub(crate) fn construct_end(input: &str) -> Option<usize> {
+    construct_span(input).and_then(|(lead, _, end)| (lead == 0).then_some(end))
 }
 fn inclusion(input: &str) -> String {
     let mut selected = String::new();
