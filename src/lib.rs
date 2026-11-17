@@ -1,9 +1,18 @@
 mod core;
+mod expansion;
+mod functions;
 mod html;
 mod html_policy;
 mod inline;
 mod metadata;
 mod table;
+mod transclusion;
+mod wiki_data;
+mod wiki_links;
+mod wiki_markup;
+
+pub use wiki_data::{ConversionOptions, ExpansionLimits, LookupError, WikiData};
+pub use wiki_links::FileInfo;
 
 use inline::Inline;
 use std::fmt;
@@ -74,6 +83,8 @@ pub enum ConversionMode {
 pub enum DiagnosticKind {
     ConversionLoss,
     HtmlRemoval,
+    WikiLookup,
+    ExpansionLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +114,8 @@ impl fmt::Display for Diagnostic {
         let kind = match self.kind {
             DiagnosticKind::ConversionLoss => "conversion loss",
             DiagnosticKind::HtmlRemoval => "HTML removal",
+            DiagnosticKind::WikiLookup => "wiki lookup error",
+            DiagnosticKind::ExpansionLimit => "expansion limit",
         };
         write!(
             f,
@@ -132,6 +145,25 @@ impl ConversionError {
 
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
+    }
+
+    fn lookup(span: Range<usize>, operation: &str, title: &str, error: LookupError) -> Self {
+        Self::diagnosed(
+            DiagnosticKind::WikiLookup,
+            span,
+            format!("{operation} for {title}: {error}"),
+        )
+    }
+
+    fn expansion_limit(span: Range<usize>, message: impl Into<String>) -> Self {
+        Self::diagnosed(DiagnosticKind::ExpansionLimit, span, message.into())
+    }
+
+    fn diagnosed(kind: DiagnosticKind, span: Range<usize>, message: String) -> Self {
+        Self {
+            diagnostics: vec![Diagnostic::new(kind, span, &message)],
+            message,
+        }
     }
 }
 impl fmt::Display for ConversionError {
@@ -173,6 +205,19 @@ pub fn convert_with_mode(
     request: ConversionRequest<'_>,
     mode: ConversionMode,
 ) -> Result<ConversionResult, ConversionError> {
+    convert_with_options(
+        request,
+        ConversionOptions {
+            mode,
+            ..ConversionOptions::default()
+        },
+    )
+}
+
+pub fn convert_with_options(
+    request: ConversionRequest<'_>,
+    options: ConversionOptions<'_>,
+) -> Result<ConversionResult, ConversionError> {
     if !matches!(
         (request.source, request.target),
         (Format::Wikitext, Format::Gfm | Format::Html)
@@ -182,53 +227,23 @@ pub fn convert_with_mode(
     }
 
     let mut diagnostics = Vec::new();
+    let mut markup = wiki_markup::Markup::default();
     let (document, page_metadata) = match request.source {
-        Format::Wikitext => {
-            let metadata = metadata::extract_wikitext(request.input, request.context)?;
-            if request.target == Format::Gfm {
-                diagnostics.extend(metadata.locations.into_iter().map(|location| {
-                    Diagnostic::loss(
-                        location.start..location.end,
-                        format!("saving the GFM body alone loses the {}", location.kind),
-                    )
-                }));
-            }
-            let (without_templates, template_losses) = strip_transclusions(&metadata.body);
-            let template_ranges: Vec<_> = template_losses
-                .iter()
-                .map(|loss| loss.span.clone())
-                .collect();
-            let sanitized = html_policy::sanitize(&without_templates, true);
-            let map_template_span =
-                |span| original_range(original_range(span, &template_ranges), &metadata.ranges);
-            let document = parse_wikitext(
-                &sanitized.text,
-                request.context.site_language,
-                &|span| map_template_span(sanitized.original_span(span)),
-                &mut diagnostics,
-            );
-            diagnostics.extend(template_losses.into_iter().map(|mut diagnostic| {
-                diagnostic.span = original_range(diagnostic.span, &metadata.ranges);
-                diagnostic
-            }));
-            diagnostics.extend(sanitized.diagnostics.into_iter().map(|mut diagnostic| {
-                diagnostic.span = map_template_span(diagnostic.span);
-                diagnostic
-            }));
-            (document, metadata.metadata)
-        }
+        Format::Wikitext => prepare_wikitext(request, options, &mut markup, &mut diagnostics)?,
         Format::Html => {
             let metadata = metadata::extract_html(request.input, request.context)?;
             let document = parse_html(
                 &metadata.body,
                 request.input,
                 &metadata.ranges,
+                &mut markup,
+                options.wiki_data,
                 &mut diagnostics,
             )?;
             (document, metadata.metadata)
         }
         Format::Gfm => (
-            parse_gfm(request.input, &mut diagnostics)?,
+            parse_gfm(request.input, options.wiki_data, &mut diagnostics)?,
             PageMetadata::default(),
         ),
     };
@@ -301,8 +316,9 @@ pub fn convert_with_mode(
             blocks.push(encoded_metadata);
         }
     }
+    let content = markup.render(blocks.join(separator), &mut diagnostics);
     diagnostics.sort_by_key(|diagnostic| diagnostic.span.start);
-    if mode == ConversionMode::Strict
+    if options.mode == ConversionMode::Strict
         && diagnostics
             .iter()
             .any(|diagnostic| diagnostic.kind == DiagnosticKind::ConversionLoss)
@@ -313,10 +329,209 @@ pub fn convert_with_mode(
         });
     }
     Ok(ConversionResult {
-        content: blocks.join(separator),
+        content,
         metadata: page_metadata,
         diagnostics,
     })
+}
+
+fn prepare_wikitext(
+    request: ConversionRequest<'_>,
+    options: ConversionOptions<'_>,
+    markup: &mut wiki_markup::Markup,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(Document, PageMetadata), ConversionError> {
+    let expanded = expansion::expand(
+        request.input,
+        request.context,
+        options.wiki_data,
+        options.expansion_limits,
+    )?;
+    let expanded_span = |span| expanded.original_span(span);
+    let metadata = metadata::extract_wikitext(&expanded.text, request.context)?;
+    let body_span = |span| expanded_span(original_range(span, &metadata.ranges));
+    let sanitized = html_policy::sanitize(&metadata.body, true);
+    let sanitized_span = |span| body_span(sanitized.original_span(span));
+    let project = |span| sanitized.output_span(range_after_removals(span, &metadata.ranges));
+
+    if request.target == Format::Gfm {
+        let metadata_loss = |span, kind| {
+            Diagnostic::loss(span, format!("saving the GFM body alone loses the {kind}"))
+        };
+        diagnostics.extend(
+            metadata
+                .locations
+                .iter()
+                .map(|at| metadata_loss(expanded_span(at.start..at.end), at.kind)),
+        );
+    }
+    diagnostics.extend(expanded.diagnostics.iter().cloned());
+    diagnostics.extend(sanitized.diagnostics.iter().cloned().map(|mut diagnostic| {
+        diagnostic.span = body_span(diagnostic.span);
+        diagnostic
+    }));
+
+    let links = wiki_links::scan(
+        &sanitized.text,
+        request.context.site_language,
+        request.target,
+        options.wiki_data,
+    )
+    .map_err(|(range, error)| {
+        let target = sanitized.text[range.clone()]
+            .strip_prefix("[[")
+            .and_then(|link| link.split(['|', ']']).next())
+            .unwrap_or("");
+        ConversionError::lookup(sanitized_span(range), "link", target, error)
+    })?;
+    if request.target == Format::Html {
+        for call in &expanded.invocations {
+            let span = project(call.expanded_range.clone());
+            let source = call.source_range.clone();
+            let nearby = links.partition_point(|link| link.range.end <= span.start);
+            let overlapping = links[nearby..]
+                .iter()
+                .take_while(|link| link.range.start < span.end);
+            if overlapping.clone().any(|link| {
+                (link.range.start < span.start && span.start < link.range.end)
+                    || (link.range.start < span.end && span.end < link.range.end)
+            }) || inside_wiki_token(&sanitized.text, span.start)
+                || inside_wiki_token(&sanitized.text, span.end)
+            {
+                diagnostics.push(Diagnostic::loss(
+                    source,
+                    "cannot attach Parsoid metadata to a partial link or tag",
+                ));
+                continue;
+            }
+            let fragment = &sanitized.text[span.clone()];
+            let block = looks_like_block(fragment)
+                || overlapping
+                    .clone()
+                    .any(|link| link.range == span && link.html.starts_with("<figure"));
+            let aligned = is_line_aligned(&sanitized.text, &span);
+            let joins_linktrail = fragment.ends_with("]]")
+                && sanitized.text[span.end..].starts_with(|ch: char| ch.is_ascii_lowercase());
+            let joins_block = block
+                && if aligned {
+                    continues_wiki_block(&sanitized.text, &span)
+                } else {
+                    fragment.contains('\n') || fragment.trim_start().starts_with('<')
+                };
+            let delimiter = !fragment.trim().is_empty()
+                && fragment.trim().bytes().all(|ch| matches!(ch, b'|' | b'='));
+            if joins_block || joins_linktrail || delimiter && !aligned {
+                diagnostics.push(Diagnostic::loss(
+                    source,
+                    "cannot attach Parsoid metadata to this combined block or link",
+                ));
+                continue;
+            }
+            let block = block && aligned;
+            let (mw, parsoid) = transclusion::metadata(call);
+            markup.group(span, source, block, mw, parsoid);
+        }
+    }
+    for link in links {
+        if let Some(loss) = link.loss {
+            diagnostics.push(Diagnostic::loss(sanitized_span(link.range.clone()), loss));
+        }
+        let block = link.html.starts_with("<figure");
+        let isolate = block && !is_line_aligned(&sanitized.text, &link.range);
+        markup.replace(link.range, link.html, block, isolate);
+    }
+    for (span, title) in &expanded.missing_links {
+        let projected = project(span.clone());
+        if inside_wiki_token(&sanitized.text, projected.start)
+            || inside_wiki_token(&sanitized.text, projected.end)
+        {
+            diagnostics.push(Diagnostic::loss(
+                expanded_span(span.clone()),
+                "cannot place a missing-template link inside another link or tag",
+            ));
+            continue;
+        }
+        markup.replace(
+            projected,
+            wiki_markup::redlink(title, request.target),
+            false,
+            false,
+        );
+    }
+    let marked = markup.apply(&sanitized.text);
+    let document = parse_wikitext(
+        &marked.text,
+        request.context.site_language,
+        &|span| sanitized_span(marked.original_span(span)),
+        diagnostics,
+    );
+
+    Ok((document, metadata.metadata))
+}
+
+fn is_line_aligned(input: &str, span: &Range<usize>) -> bool {
+    input[..span.start]
+        .rsplit('\n')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+        && input[span.end..]
+            .split('\n')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+}
+
+fn looks_like_block(input: &str) -> bool {
+    let first = input
+        .trim_start_matches(['\n', '\r'])
+        .split('\n')
+        .next()
+        .unwrap_or("");
+    first.starts_with(['*', '#', ';', ':', ' '])
+        || first.starts_with("{|")
+        || first.starts_with("----")
+        || heading(first).is_some()
+        || input.contains("\n\n")
+        || html_policy::tag_info(first).is_some_and(|(name, _, _)| html_policy::is_block(&name))
+}
+
+fn continues_wiki_block(input: &str, span: &Range<usize>) -> bool {
+    let group = |line: &str| match line.as_bytes().first() {
+        Some(b'*' | b'#' | b':' | b';') => Some("list"),
+        Some(b' ') => Some("pre"),
+        _ => None,
+    };
+    let fragment = input[span.clone()].trim_matches(['\r', '\n']);
+    let first = fragment.split('\n').next().unwrap_or("");
+    let last = fragment.rsplit('\n').next().unwrap_or("");
+    let before = input[..span.start].rsplit('\n').nth(1).unwrap_or("");
+    let after = input[span.end..].split('\n').nth(1).unwrap_or("");
+    group(first).is_some_and(|value| group(before) == Some(value))
+        || group(last).is_some_and(|value| group(after) == Some(value))
+}
+
+fn inside_wiki_token(input: &str, at: usize) -> bool {
+    let prefix = input[..at].rsplit('\n').next().unwrap_or("");
+    let delimited = |open, close| {
+        prefix
+            .rfind(open)
+            .is_some_and(|start| !prefix[start..].contains(close))
+    };
+    delimited("[[", "]]") || delimited("<", ">")
+}
+
+fn range_after_removals(span: Range<usize>, ranges: &[Range<usize>]) -> Range<usize> {
+    let boundary = |offset: usize| {
+        offset
+            - ranges
+                .iter()
+                .map(|range| offset.min(range.end).saturating_sub(range.start))
+                .sum::<usize>()
+    };
+    boundary(span.start)..boundary(span.end)
 }
 
 fn original_range(span: Range<usize>, removed: &[Range<usize>]) -> Range<usize> {
@@ -331,88 +546,6 @@ fn original_range(span: Range<usize>, removed: &[Range<usize>]) -> Range<usize> 
         }
     }
     start..end.max(start)
-}
-
-fn strip_transclusions(input: &str) -> (String, Vec<Diagnostic>) {
-    let (mut pos, mut output, mut diagnostics) = (0, String::new(), Vec::new());
-    while pos < input.len() {
-        let tail = &input[pos..];
-        let literal = if let Some(comment) = tail.strip_prefix("<!--") {
-            Some(comment.find("-->").map_or(tail.len(), |end| end + 7))
-        } else if tail
-            .get(..8)
-            .is_some_and(|s| s.eq_ignore_ascii_case("<nowiki>"))
-        {
-            Some(
-                tail.to_ascii_lowercase()
-                    .find("</nowiki>")
-                    .map_or(tail.len(), |end| end + 9),
-            )
-        } else if let Some((name, open_end, false)) = html_policy::tag_info(tail) {
-            if name == "pre" {
-                html_policy::raw_close(&tail[open_end..], &name).map(|(_, end)| open_end + end)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(length) = literal {
-            output.push_str(&tail[..length]);
-            pos += length;
-            continue;
-        }
-        if tail.starts_with("{{") {
-            let length = transclusion_end(tail);
-            if let Some(length) = length {
-                diagnostics.push(Diagnostic::loss(
-                    pos..pos + length,
-                    "unsupported wikitext transclusion omitted",
-                ));
-                pos += length;
-                continue;
-            }
-            output.push_str(tail);
-            break;
-        }
-        let character = tail.chars().next().unwrap();
-        output.push(character);
-        pos += character.len_utf8();
-    }
-    (output, diagnostics)
-}
-
-fn transclusion_end(input: &str) -> Option<usize> {
-    let mut levels = Vec::new();
-    let mut pos = 0;
-    while let Some(next) = input[pos..].find(['{', '}']) {
-        pos += next;
-        let tail = &input[pos..];
-        if tail.starts_with("{{") {
-            let width = if tail.starts_with("{{{") && !tail.starts_with("{{{{") {
-                3
-            } else {
-                2
-            };
-            levels.push(width);
-            pos += width;
-        } else if let Some(&width) = levels.last() {
-            if tail
-                .as_bytes()
-                .get(..width)
-                .is_some_and(|part| part.iter().all(|&b| b == b'}'))
-            {
-                levels.pop();
-                pos += width;
-                if levels.is_empty() {
-                    return Some(pos);
-                }
-            } else {
-                pos += 1;
-            }
-        }
-    }
-    None
 }
 
 fn parse_wikitext(
@@ -497,7 +630,7 @@ fn parse_wikitext(
                     location(line, line.len()),
                     error.to_string(),
                 ));
-                blocks.push(Block::Paragraph(vec![Inline::Text(line.to_owned())]));
+                blocks.push(Block::Paragraph(wiki_markup::literal_inlines(line)));
                 pos += 1;
                 continue;
             }
@@ -549,7 +682,7 @@ fn parse_wiki_inline(
         Ok(inlines) => inlines,
         Err(error) => {
             diagnostics.push(Diagnostic::loss(location, error.to_string()));
-            vec![Inline::Text(input.to_owned())]
+            wiki_markup::literal_inlines(input)
         }
     }
 }
@@ -620,8 +753,17 @@ fn render_inline(content: &[Inline], format: Format) -> String {
             } => match format {
                 Format::Wikitext if *internal => {
                     let target = inline::wiki_target(href).expect("validated wiki href");
+                    let colon = if target.split_once(':').is_some_and(|(namespace, _)| {
+                        ["file", "image", "category", "media"]
+                            .iter()
+                            .any(|name| namespace.eq_ignore_ascii_case(name))
+                    }) {
+                        ":"
+                    } else {
+                        ""
+                    };
                     output.push_str(&format!(
-                        "[[{}|{}]]",
+                        "[[{colon}{}|{}]]",
                         target.replace('&', "&amp;"),
                         render_inline(label, format)
                     ));

@@ -1,0 +1,22 @@
+{
+  "context": {
+    "page_title": "Help:Example/Subpage",
+    "site_language": "en",
+    "reference_time": "2024-03-09T05:06:07Z"
+  },
+  "templates": {
+    "Template:Message": "'''{{{name}}}''' ({{{1}}}, {{{a}}})",
+    "Template:Outer": "{{Inner|{{{1|default}}}}}",
+    "Template:Inner": "<noinclude>Documentation</noinclude><includeonly>'''{{{1}}}'''</includeonly>",
+    "Template:Error": {"error": "template unavailable"}
+  },
+  "pages": {
+    "Main_Page": true,
+    "Missing": false,
+    "Lookup_error": {"error": "page unavailable"}
+  },
+  "files": {
+    "File:Example.png": {"url": "https://example.org/example.png", "width": 400, "height": 200},
+    "File:Error.png": {"error": "file unavailable"}
+  }
+}

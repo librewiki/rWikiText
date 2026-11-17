@@ -12,6 +12,16 @@ Use `wikitext`, `gfm`, or `html` as the source and target, with wikitext on one 
 
 The `rwikitext::convert` Rust function accepts a `ConversionRequest` containing the source, target, input, and wiki context. It returns best-effort content, page metadata, and diagnostics with half-open byte ranges in the input. Pass `ConversionMode::Strict` to `convert_with_mode`, or use `--strict` in the CLI, to fail when conversion would lose document meaning. HTML removals that leave document meaning intact are still reported.
 
+Use `convert_with_options` to supply a `WikiData` implementation and configure `ExpansionLimits`. Template, page, and file lookups run synchronously on the thread calling `convert_with_options`. Callback titles use namespace spelling such as `Template:Example_name` and `File:Example.png`. Return `Ok(Some(data))` for known data, `Ok(None)` for missing data, or `Err(LookupError::new(message))` to abort conversion with a located diagnostic. Page existence also accepts `Ok(Some(false))`. The default expansion limits are 40 levels, 10,000 evaluations, and 2 MiB of expanded wikitext. Evaluations include template calls, parser functions, and parameter substitutions.
+
+Use `--wiki-data` for reproducible CLI lookups. This JSON file contains optional `context`, `templates`, `pages`, and `files` objects. CLI context flags override values in `context`. Use `null` or omit a title for a missing result. Use an object with an `error` string for a lookup error. A file entry supplies a `url` and optional pixel `width` and `height`.
+
+```sh
+cargo run -- wikitext html --wiki-data tests/fixtures/wiki-data.json
+```
+
+Enter `{{Outer|example}}` to expand the nested template in the fixture. HTML can preserve a template invocation and its arguments in Parsoid metadata for HTML-to-wikitext conversion. Wiki file syntax resolves media URLs through the caller's data. HTML and GFM imports report a conversion loss when the caller's file data cannot reproduce the supplied URL.
+
 The result exposes category names and their corresponding sort keys, redirects, and display titles. Wikitext and Parsoid HTML can carry this metadata in the document. GFM returns it separately and reports what would be lost if only the GFM body were saved.
 
 See [the compatibility baseline](docs/compatibility.md) for the pinned upstream tests.
@@ -44,7 +54,7 @@ See [the compatibility baseline](docs/compatibility.md) for the pinned upstream 
 
 ## Current Status
 
-rWikiText has a Rust conversion API and test CLI. The first-release roadmap tracks additional MediaWiki syntax, wiki data callbacks, and native language bindings.
+rWikiText has a Rust conversion API and test CLI with caller-supplied wiki data. The first-release roadmap tracks further MediaWiki compatibility verification and native language bindings.
 
 ### Completed
 

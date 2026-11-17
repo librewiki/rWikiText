@@ -4,7 +4,8 @@ use scraper::{ElementRef, Html, Node};
 
 use crate::{
     core, escape_wikitext, heading_id, html_policy, inline, locate, original_range, render_inline,
-    table, Block, ConversionError, Diagnostic, Document, Format, Inline,
+    table, transclusion, wiki_links, wiki_markup, Block, ConversionError, Diagnostic, Document,
+    Format, Inline, WikiData,
 };
 
 enum MarkdownSource {
@@ -109,6 +110,7 @@ fn markdown_diagnostics<'a>(
 
 pub(crate) fn parse_gfm(
     input: &str,
+    wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Document, ConversionError> {
     let mut options = comrak::Options::default();
@@ -133,7 +135,7 @@ pub(crate) fn parse_gfm(
         &locations,
         sanitized.diagnostics,
     ));
-    parse_html_document(&sanitized.text, input, diagnostics)
+    parse_html_document(&sanitized.text, input, wiki_data, diagnostics)
 }
 
 fn normalized_html_text(text: &str) -> String {
@@ -228,22 +230,98 @@ pub(crate) fn parse_html(
     input: &str,
     original: &str,
     extracted: &[Range<usize>],
+    markup: &mut wiki_markup::Markup,
+    wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Document, ConversionError> {
+    let (edits, metadata_diagnostics) = transclusion::recover(input);
     let sanitized = html_policy::sanitize(input, false);
-    diagnostics.extend(sanitized.diagnostics.into_iter().map(|mut diagnostic| {
-        diagnostic.span = original_range(diagnostic.span, extracted);
-        diagnostic
-    }));
-    parse_html_document(&sanitized.text, original, diagnostics)
+    diagnostics.extend(
+        metadata_diagnostics
+            .into_iter()
+            .chain(sanitized.diagnostics.iter().cloned())
+            .map(|mut diagnostic| {
+                diagnostic.span = original_range(diagnostic.span, extracted);
+                diagnostic
+            }),
+    );
+    for edit in edits {
+        markup.replace(
+            sanitized.output_span(edit.span),
+            edit.code,
+            edit.block,
+            false,
+        );
+    }
+    parse_html_document(
+        &markup.apply(&sanitized.text).text,
+        original,
+        wiki_data,
+        diagnostics,
+    )
 }
 
 fn parse_html_document(
     sanitized: &str,
     original: &str,
+    wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Document, ConversionError> {
     let dom = Html::parse_fragment(sanitized);
+    let check_url = |resource: &str, url: &str, diagnostics: &mut Vec<Diagnostic>| {
+        let span = locate(original, url);
+        let title = inline::normalize_title(resource);
+        let expected = wiki_data
+            .map_or(Ok(None), |data| data.file_info(&title))
+            .map_err(|error| {
+                ConversionError::lookup(span.clone(), "file information", &title, error)
+            })?;
+        if expected.is_none_or(|file| file.url != url) {
+            diagnostics.push(Diagnostic::loss(
+                span,
+                "wiki file syntax resolves the media URL through wiki data",
+            ));
+        }
+        Ok::<(), ConversionError>(())
+    };
+    for link in dom
+        .root_element()
+        .descendent_elements()
+        .filter(|element| element.value().name() == "a")
+    {
+        if let (Some(name), Some(url)) = (wiki_links::media_link_name(link), link.attr("href")) {
+            let resource = format!("File:{name}");
+            if inline::internal_href(&resource).ok().as_deref() != Some(url) {
+                check_url(&resource, url, diagnostics)?;
+            }
+        }
+    }
+    for image in dom
+        .root_element()
+        .descendent_elements()
+        .filter(|element| element.value().name() == "img")
+    {
+        let src = image.attr("src");
+        let span = src.map_or_else(|| locate(original, "<img"), |src| locate(original, src));
+        let resource = image
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .find_map(|parent| {
+                wiki_links::file_element(parent)
+                    .filter(|media| media.id() == image.id())
+                    .and_then(wiki_links::file_resource)
+            });
+        if let Some(resource) = resource {
+            if let Some(src) = src {
+                check_url(&resource, src, diagnostics)?;
+            }
+        } else {
+            diagnostics.push(Diagnostic::loss(
+                span,
+                "image has no valid wiki file resource",
+            ));
+        }
+    }
     let mut blocks = Vec::new();
     let mut ids = std::collections::HashSet::new();
     html_blocks(
@@ -278,7 +356,10 @@ fn html_blocks(
                         continue;
                     }
                     "p" if element.value().attrs().next().is_none()
-                        && !element.text().collect::<String>().trim_ascii().is_empty() =>
+                        && (!element.text().collect::<String>().trim_ascii().is_empty()
+                            || element
+                                .descendent_elements()
+                                .any(|child| child.attr("data-rwikitext-token").is_some())) =>
                     {
                         Block::Paragraph(parse_html_inlines(element)?)
                     }
@@ -409,6 +490,28 @@ fn wiki_attributes<'a>(attributes: impl Iterator<Item = (&'a str, &'a str)>) -> 
 pub(crate) fn html_to_wiki(source: &str) -> String {
     fn render_element(element: ElementRef<'_>, output: &mut String) {
         let name = element.value().name();
+        if let Some(wiki) = wiki_links::media_to_wikitext(element)
+            .or_else(|| wiki_links::media_link_to_wikitext(element))
+        {
+            output.push_str(&wiki);
+            return;
+        }
+        if name == "img" {
+            let alt = element.attr("alt").unwrap_or("");
+            if let Some(src) = element
+                .attr("src")
+                .filter(|src| html_policy::external_url(src))
+            {
+                output.push_str(&format!(
+                    "[{} {}]",
+                    html_policy::escape_wiki_attribute_value(src),
+                    escape_wikitext(if alt.is_empty() { src } else { alt })
+                ));
+            } else {
+                output.push_str(&escape_wikitext(alt));
+            }
+            return;
+        }
         if name == "a" {
             let attributes = wiki_attributes(
                 element
@@ -425,7 +528,10 @@ pub(crate) fn html_to_wiki(source: &str) -> String {
             }
             return;
         }
-        let name = if name == "section" { "div" } else { name };
+        let name = match name {
+            "section" | "figure" | "figcaption" => "div",
+            name => name,
+        };
         let wrapper = !matches!(name, "html" | "thead" | "tbody" | "tfoot");
         if wrapper {
             let attributes = wiki_attributes(element.value().attrs());

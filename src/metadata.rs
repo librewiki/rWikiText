@@ -162,6 +162,25 @@ fn add(e: &mut Extraction, start: usize, end: usize, kind: &'static str) {
     e.locations.push(MetadataLocation { start, end, kind });
 }
 
+pub(crate) fn redirect(input: &str) -> Option<(&str, usize)> {
+    let directive = input.trim_start_matches([' ', '\t', '\r', '\n']);
+    if !directive
+        .get(..9)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#redirect"))
+    {
+        return None;
+    }
+    let rest = directive[9..].trim_start_matches([' ', '\t', '\r', '\n']);
+    let rest = rest
+        .strip_prefix(':')
+        .unwrap_or(rest)
+        .trim_start_matches([' ', '\t', '\r', '\n']);
+    let link = rest.strip_prefix("[[")?;
+    let end = link.find("]]")?;
+    let target = &link[..end];
+    valid_title(target).then_some((target, input.len() - link.len() + end + 2))
+}
+
 pub(crate) fn extract_wikitext(
     input: &str,
     ctx: &WikiContext<'_>,
@@ -170,35 +189,11 @@ pub(crate) fn extract_wikitext(
     let mut ranges = Vec::new();
     let mut pos = 0;
     // Redirect is a page directive only at the beginning of the document.
-    let prefix = input.len() - input.trim_start_matches([' ', '\t', '\r', '\n']).len();
-    if input
-        .get(prefix..prefix + 9)
-        .is_some_and(|s| s.eq_ignore_ascii_case("#redirect"))
-    {
-        let mut offset = prefix + 9;
-        offset += input[offset..].len()
-            - input[offset..]
-                .trim_start_matches([' ', '\t', '\r', '\n'])
-                .len();
-        if input[offset..].starts_with(':') {
-            offset += 1;
-            offset += input[offset..].len()
-                - input[offset..]
-                    .trim_start_matches([' ', '\t', '\r', '\n'])
-                    .len();
-        }
-        if let Some(rest) = input[offset..].strip_prefix("[[") {
-            if let Some(end) = rest.find("]]") {
-                let target = &rest[..end];
-                if valid_title(target) {
-                    let stop = offset + 2 + end + 2;
-                    e.metadata.redirect_target = Some(title(target));
-                    ranges.push((0, stop));
-                    add(&mut e, 0, stop, "redirect");
-                    pos = stop;
-                }
-            }
-        }
+    if let Some((target, stop)) = redirect(input) {
+        e.metadata.redirect_target = Some(title(target));
+        ranges.push((0, stop));
+        add(&mut e, 0, stop, "redirect");
+        pos = stop;
     }
     while pos < input.len() {
         let rest = &input[pos..];
