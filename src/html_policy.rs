@@ -65,8 +65,17 @@ const WIKI_TAGS: &[&str] = &[
     "var",
     "wbr",
 ];
-const IMPORT_TAGS: &[&str] = &["a", "tbody", "thead", "tfoot", "section"];
-const VOID: &[&str] = &["br", "hr", "link", "meta", "wbr"];
+const IMPORT_TAGS: &[&str] = &[
+    "a",
+    "tbody",
+    "thead",
+    "tfoot",
+    "section",
+    "figure",
+    "figcaption",
+    "img",
+];
+const VOID: &[&str] = &["br", "hr", "link", "meta", "wbr", "img"];
 const RAW: &[&str] = &[
     "script",
     "style",
@@ -155,6 +164,9 @@ pub(crate) fn external_url(url: &str) -> bool {
 }
 
 fn allowed_attr(tag: &str, name: &str) -> bool {
+    if name == "data-rwikitext-token" {
+        return false;
+    }
     match tag {
         "meta" => return matches!(name, "itemprop" | "content"),
         "link" => return matches!(name, "itemprop" | "href" | "title"),
@@ -178,6 +190,7 @@ fn allowed_attr(tag: &str, name: &str) -> bool {
     }
     let specific: &[&str] = match tag {
         "a" => &["href", "rel", "rev"],
+        "img" => &["src", "alt", "width", "height"],
         "blockquote" | "q" => &["cite"],
         "del" | "ins" => &["cite", "datetime"],
         "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "caption" => &["align"],
@@ -217,6 +230,16 @@ fn safe_attr(tag: &str, name: &str, value: &str) -> bool {
         .flat_map(char::to_lowercase)
         .collect();
     match name {
+        "src" => {
+            (value.starts_with('/')
+                || value.to_ascii_lowercase().starts_with("http://")
+                || value.to_ascii_lowercase().starts_with("https://"))
+                && (external_url(value) || value.starts_with('/') && !value.starts_with("//"))
+                && !value.chars().any(|ch| {
+                    ch.is_whitespace() || ch.is_control() || matches!(ch, '<' | '>' | '"' | '\\')
+                })
+        }
+        "width" | "height" if tag == "img" => value.parse::<u32>().is_ok_and(|n| n > 0),
         "href" | "cite" => {
             (external_url(value)
                 || (tag != "link"
@@ -401,11 +424,40 @@ pub(crate) fn is_block(name: &str) -> bool {
             | "table"
             | "ul"
             | "section"
+            | "figure"
+            | "figcaption"
     )
 }
 
 pub(crate) fn tag_info(input: &str) -> Option<(String, usize, bool)> {
     tag(input).map(|tag| (tag.name, tag.end, tag.closing))
+}
+
+pub(crate) fn element_len(input: &str) -> Option<usize> {
+    let open = tag(input)?;
+    if open.closing {
+        None
+    } else if open.self_closing || VOID.contains(&open.name.as_str()) {
+        Some(open.end)
+    } else {
+        matching_close(input, &open)
+    }
+}
+
+pub(crate) fn can_import(name: &str) -> bool {
+    WIKI_TAGS.contains(&name) || IMPORT_TAGS.contains(&name)
+}
+
+pub(crate) fn attributes(input: &str) -> impl Iterator<Item = (String, String)> + '_ {
+    tag(input)
+        .into_iter()
+        .flat_map(|tag| tag.attrs.into_iter())
+        .map(|attr| {
+            (
+                attr.name,
+                html_escape::decode_html_entities(attr.value).into_owned(),
+            )
+        })
 }
 
 pub(crate) fn sanitize_tag_attributes(name: &str, attrs: &str) -> (String, Vec<Diagnostic>) {
@@ -451,6 +503,10 @@ fn matching_close(input: &str, open: &Tag<'_>) -> Option<usize> {
     let mut pos = open.end;
     while let Some(next) = input[pos..].find('<') {
         pos += next;
+        if let Some(comment) = input[pos..].strip_prefix("<!--") {
+            pos += comment.find("-->")? + 7;
+            continue;
+        }
         if let Some(next) = tag(&input[pos..]) {
             pos += next.end;
             if next.name == open.name {
@@ -462,6 +518,9 @@ fn matching_close(input: &str, open: &Tag<'_>) -> Option<usize> {
                 if depth == 0 {
                     return Some(pos);
                 }
+            } else if !next.closing && RAW.contains(&next.name.as_str()) {
+                let (_, end) = raw_close(&input[pos..], &next.name)?;
+                pos += end;
             }
         } else {
             pos += 1;
@@ -493,6 +552,23 @@ impl Sanitized {
         };
         let start = boundary(span.start, true);
         start..boundary(span.end, false).max(start)
+    }
+
+    pub fn output_span(&self, span: Range<usize>) -> Range<usize> {
+        let boundary = |offset: usize, end: bool| {
+            let mut mapped = offset;
+            for (input, output) in &self.replacements {
+                if offset <= input.start {
+                    break;
+                }
+                if offset < input.end {
+                    return if end { output.end } else { output.start };
+                }
+                mapped = output.end + (offset - input.end);
+            }
+            mapped
+        };
+        boundary(span.start, false)..boundary(span.end, true)
     }
 }
 
@@ -562,7 +638,11 @@ fn sanitize_token(
         return 1;
     };
     let name = token.name.as_str();
-    let allowed = WIKI_TAGS.contains(&name) || (!wikitext && IMPORT_TAGS.contains(&name));
+    let allowed = if wikitext {
+        WIKI_TAGS.contains(&name)
+    } else {
+        can_import(name)
+    };
     let microdata = !matches!(name, "link" | "meta")
         || token.closing
         || (token.attrs.iter().any(|a| a.name == "itemprop")
@@ -617,6 +697,32 @@ fn sanitize_token(
             value = css_without_comments(&value).into();
         }
         let scoped = itemscope || !matches!(key, "itemid" | "itemref" | "itemtype");
+        let parsoid_link = name == "a"
+            && token
+                .attrs
+                .iter()
+                .any(|attr| attr.name == "rel" && attr.value == "mw:WikiLink");
+        let redlink = parsoid_link
+            && token.attrs.iter().any(|attr| {
+                attr.name == "href"
+                    && html_escape::decode_html_entities(attr.value)
+                        .contains("?action=edit&redlink=1")
+            });
+        if !wikitext
+            && (key == "about" && value.starts_with("#mwt")
+                || key == "typeof"
+                    && value
+                        .split_ascii_whitespace()
+                        .any(|kind| matches!(kind, "mw:Transclusion" | "mw:LocalizedAttrs"))
+                || redlink && key == "class" && value == "new"
+                || parsoid_link && key == "title")
+        {
+            continue;
+        }
+        if !wikitext && name == "a" && key == "rel" && value == "mw:MediaLink" {
+            output.push_str(" rel=\"mw:MediaLink\"");
+            continue;
+        }
         if !wikitext && name == "a" && matches!(key, "rel" | "rev") {
             if !matches!(value.as_ref(), "mw:WikiLink" | "mw:ExtLink") {
                 diagnostics.push(Diagnostic::loss(
@@ -642,7 +748,8 @@ fn sanitize_token(
         } else if !wikitext
             && (key == "rel" && value.starts_with("mw:")
                 || key == "data-parsoid"
-                || key == "data-mw")
+                || key == "data-mw"
+                || key == "data-mw-i18n")
         {
             // Parsoid bookkeeping is consumed separately from rendered HTML.
         } else {
