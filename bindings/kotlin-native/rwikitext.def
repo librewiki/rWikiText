@@ -1,0 +1,3 @@
+headers = rwikitext.h
+package = rwikitext
+noStringConversion = rwikitext_v1_convert rwikitext_v1_reply_set rwikitext_v1_free
