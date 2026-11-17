@@ -72,9 +72,9 @@ echo "{{Outer|example}}" | cargo run --locked -- wikitext html - --wiki-data tes
 
 ### Native bindings
 
-The version 1 C ABI exposes the same conversion core to C, Python, PHP, Java, Kotlin/Native, and Node.js. The first-release verification matrix targets Linux x86-64 and ARM64 with glibc or musl. Kotlin/Native targets glibc in that matrix. [Native binding build and callback examples](docs/native-bindings.md) · [Target matrix](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md)
+The version 1 C ABI exposes the same conversion core to C, Python, PHP, Java, Kotlin/Native, Node.js, and Go. The first-release verification matrix targets Linux x86-64 and ARM64 with glibc or musl. Kotlin/Native targets glibc in that matrix. The Go binding has its own build and verification instructions. [Native binding build and callback examples](docs/native-bindings.md) · [Target matrix](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md) · [Go binding](bindings/go/README.md)
 
-The first public release, both Linux runtime checks, and a Go binding are planned. [glibc verification](https://github.com/librewiki/rWikiText/issues/26) · [musl verification](https://github.com/librewiki/rWikiText/issues/27) · [First public release](https://github.com/librewiki/rWikiText/issues/28)
+The first public release and both Linux runtime checks are planned. [glibc verification](https://github.com/librewiki/rWikiText/issues/26) · [musl verification](https://github.com/librewiki/rWikiText/issues/27) · [First public release](https://github.com/librewiki/rWikiText/issues/28)
 
 ## Development and testing
 
