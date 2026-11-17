@@ -29,3 +29,7 @@ Use the default triage labels. See `docs/agents/triage-labels.md` when assigning
 ### Domain docs
 
 Use the single-context layout. See `docs/agents/domain.md` before exploring the parser or making domain decisions.
+
+### README authoring
+
+Before creating or updating `README.md`, read and follow the [README authoring guide](docs/agents/readme_authoring.md). Review the repository before drafting and use the guide's final checklist to verify and report the changes.
