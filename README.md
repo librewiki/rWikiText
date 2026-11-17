@@ -24,7 +24,7 @@ Enter `{{Outer|example}}` to expand the nested template in the fixture. HTML can
 
 The result exposes category names and their corresponding sort keys, redirects, and display titles. Wikitext and Parsoid HTML can carry this metadata in the document. GFM returns it separately and reports what would be lost if only the GFM body were saved.
 
-See [the compatibility baseline](docs/compatibility.md) for the pinned upstream tests.
+See [the compatibility baseline](docs/compatibility.md) and [parser case inventory](docs/parser-case-inventory.md) for the pinned upstream tests and corpus audit.
 
 Build the versioned C ABI and run the C, Python, PHP, Java, Kotlin/Native, and Node.js examples using the [native binding guide](docs/native-bindings.md).
 
@@ -56,7 +56,7 @@ Build the versioned C ABI and run the C, Python, PHP, Java, Kotlin/Native, and N
 
 ## Current Status
 
-rWikiText has a Rust conversion API, test CLI, and native bindings with caller-supplied wiki data. The first-release roadmap tracks further MediaWiki compatibility and Linux runtime verification.
+rWikiText provides a Rust conversion core, test CLI, versioned C ABI, and native language bindings with caller-supplied wiki data callbacks. All core document conversions, MediaWiki core syntax, and native bindings are implemented and verified against MediaWiki 1.46.2 and Parsoid HTML 2.8.0. The first public release is tracking Linux runtime matrix verification.
 
 ### Completed
 
@@ -65,21 +65,26 @@ rWikiText has a Rust conversion API, test CLI, and native bindings with caller-s
   - [ADR 0001](docs/adr/0001-parsoid-and-document-fidelity.md): Parsoid compatibility reference, conversion contract, metadata, sanitization, and verification strategy.
   - [ADR 0002](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md): Versioned C ABI, synchronous caller-supplied wiki data callbacks, test CLI contract, and first-release Linux runtime matrix.
 - **Release specification and roadmap**: Published the first release specification ([#2](https://github.com/librewiki/rWikiText/issues/2)) and decomposed the implementation into tracked tasks ([#3](https://github.com/librewiki/rWikiText/issues/3)–[#28](https://github.com/librewiki/rWikiText/issues/28)).
+- **First Development Milestone (Basic Document Conversion)**:
+  - Pinned the MediaWiki 1.46.2 and Parsoid HTML 2.8.0 baseline and implemented end-to-end paragraph conversion in the Rust API and CLI ([#3](https://github.com/librewiki/rWikiText/issues/3)).
+  - Supported headings ([#4](https://github.com/librewiki/rWikiText/issues/4)), links ([#5](https://github.com/librewiki/rWikiText/issues/5)), and basic ordered and unordered lists ([#6](https://github.com/librewiki/rWikiText/issues/6)) across all four conversion directions and both wikitext round trips.
+  - Verified the complete basic document workflow across the Rust API and CLI ([#7](https://github.com/librewiki/rWikiText/issues/7)).
+- **Core MediaWiki Syntax, Metadata, and Callbacks (Milestone 2)**:
+  - Conversion-loss diagnostics and strict mode ([#8](https://github.com/librewiki/rWikiText/issues/8)) and MediaWiki HTML element, attribute, and URL policy enforcement ([#9](https://github.com/librewiki/rWikiText/issues/9)).
+  - Core inline and block formatting ([#10](https://github.com/librewiki/rWikiText/issues/10)), tables with native GFM and permitted HTML fallback ([#11](https://github.com/librewiki/rWikiText/issues/11)), and structured page metadata for categories, sort keys, redirects, and display titles ([#12](https://github.com/librewiki/rWikiText/issues/12)).
+  - Caller callbacks and expansion bounds for template transclusion ([#13](https://github.com/librewiki/rWikiText/issues/13)–[#14](https://github.com/librewiki/rWikiText/issues/14)), page-existence link behavior ([#15](https://github.com/librewiki/rWikiText/issues/15)), file/media links ([#16](https://github.com/librewiki/rWikiText/issues/16)), core parser functions and context-dependent magic words ([#17](https://github.com/librewiki/rWikiText/issues/17)), and template round-tripping through validated Parsoid `data-mw` metadata ([#18](https://github.com/librewiki/rWikiText/issues/18)).
+  - Upstream MediaWiki core compatibility verification ([#19](https://github.com/librewiki/rWikiText/issues/19)): audited all 2,670 parser cases in MediaWiki 1.46.2 across 41 files with zero conversion errors ([docs/parser-case-inventory.md](docs/parser-case-inventory.md)), implemented 25 page title and namespace magic words and their URL-encoded counterparts, UTC `LOCAL*` calendar variables, core parser functions (`ns:`, `nse:`, `urlencode:`, `anchorencode:`, `#tag`), quote run boundaries, definition lists, and template redirects.
+- **Versioned C ABI and Native Language Bindings (Milestone 3)**:
+  - Version 1 C ABI and static archive/shared library with UTF-8 JSON request/response contract and synchronous caller callbacks ([#20](https://github.com/librewiki/rWikiText/issues/20)).
+  - Native bindings and runnable callback examples for Python ([#21](https://github.com/librewiki/rWikiText/issues/21)), PHP ([#22](https://github.com/librewiki/rWikiText/issues/22)), Java ([#23](https://github.com/librewiki/rWikiText/issues/23)), Kotlin/Native ([#24](https://github.com/librewiki/rWikiText/issues/24)), and Node.js ([#25](https://github.com/librewiki/rWikiText/issues/25)).
 
 ### Roadmap
 
-1. **First Development Milestone (Basic Document Conversion)**
-   - Pin the exact stable MediaWiki release and Parsoid HTML specification baseline and implement end-to-end paragraph conversion in the Rust API and CLI ([#3](https://github.com/librewiki/rWikiText/issues/3), currently in progress).
-   - Extend all four conversion directions and both wikitext round trips to headings ([#4](https://github.com/librewiki/rWikiText/issues/4)), links ([#5](https://github.com/librewiki/rWikiText/issues/5)), and basic ordered/unordered lists ([#6](https://github.com/librewiki/rWikiText/issues/6)).
-   - Verify the complete basic document workflow across the Rust API and CLI ([#7](https://github.com/librewiki/rWikiText/issues/7)).
-2. **Core MediaWiki Syntax, Metadata, and Callbacks**
-   - Conversion-loss diagnostics and strict mode ([#8](https://github.com/librewiki/rWikiText/issues/8)) and MediaWiki HTML element/attribute/URL policy enforcement ([#9](https://github.com/librewiki/rWikiText/issues/9)).
-   - Remaining core inline/block formatting ([#10](https://github.com/librewiki/rWikiText/issues/10)), tables with native GFM and permitted HTML fallback ([#11](https://github.com/librewiki/rWikiText/issues/11)), and structured page metadata for categories, redirects, and display titles ([#12](https://github.com/librewiki/rWikiText/issues/12)).
-   - Caller callbacks and expansion bounds for template transclusion ([#13](https://github.com/librewiki/rWikiText/issues/13)–[#14](https://github.com/librewiki/rWikiText/issues/14)), page-existence link behavior ([#15](https://github.com/librewiki/rWikiText/issues/15)), file/media links ([#16](https://github.com/librewiki/rWikiText/issues/16)), core parser functions and magic words ([#17](https://github.com/librewiki/rWikiText/issues/17)), and template round-tripping through validated Parsoid `data-mw` metadata ([#18](https://github.com/librewiki/rWikiText/issues/18)).
-   - Release-wide MediaWiki core compatibility verification ([#19](https://github.com/librewiki/rWikiText/issues/19)).
-3. **Versioned C ABI, Language Bindings, and First Public Release**
-   - Ship the versioned C ABI and static archive ([#20](https://github.com/librewiki/rWikiText/issues/20)) along with bindings and runnable callback examples for Python ([#21](https://github.com/librewiki/rWikiText/issues/21)), PHP ([#22](https://github.com/librewiki/rWikiText/issues/22)), Java ([#23](https://github.com/librewiki/rWikiText/issues/23)), Kotlin/Native ([#24](https://github.com/librewiki/rWikiText/issues/24)), and Node.js ([#25](https://github.com/librewiki/rWikiText/issues/25)).
-   - Verify all 22 binding and architecture combinations on Linux `glibc` and `musl` ([#26](https://github.com/librewiki/rWikiText/issues/26)–[#27](https://github.com/librewiki/rWikiText/issues/27)) and publish the first public release ([#28](https://github.com/librewiki/rWikiText/issues/28)).
+1. **Linux Runtime Matrix Verification**
+   - Run and verify all 12 candidate binding and callback examples on Linux `glibc` (`x86-64` and `ARM64`) ([#26](https://github.com/librewiki/rWikiText/issues/26)).
+   - Run and verify all 10 candidate binding and callback examples on Linux `musl` (`x86-64` and `ARM64`) ([#27](https://github.com/librewiki/rWikiText/issues/27)).
+2. **First Public Release**
+   - Publish the verified first public rWikiText release ([#28](https://github.com/librewiki/rWikiText/issues/28)) with release notes, version tag, GitHub Release, and distribution artifacts (native static archive, C header, and language binding deliverables).
 
 ### Out of Scope for the First Release
 
@@ -93,4 +98,7 @@ rWikiText has a Rust conversion API, test CLI, and native bindings with caller-s
 - [GLOSSARY.md](GLOSSARY.md) — Shared domain vocabulary
 - [ADR 0001: Use Parsoid as the wikitext compatibility reference](docs/adr/0001-parsoid-and-document-fidelity.md)
 - [ADR 0002: Share a versioned C ABI across language bindings](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md)
+- [Compatibility Baseline](docs/compatibility.md) — Pinned MediaWiki and Parsoid test baselines
+- [Parser Case Inventory](docs/parser-case-inventory.md) — Upstream parser case audit and scope classifications
+- [Native Bindings Guide](docs/native-bindings.md) — Versioned C ABI, building, and running language binding examples
 - [AGENTS.md](AGENTS.md) — Workflow, issue tracker, and conventions for contributors and agents
