@@ -1,0 +1,21 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { WikiText } = require('./index');
+const wiki = new WikiText(process.argv[2]);
+const seen = [];
+const request = { source: 'wikitext', target: 'html', input: '{{Greeting}}' };
+const result = wiki.convert(request, (operation, title) => {
+  seen.push([operation, title]);
+  const nested = wiki.convert({ source: 'wikitext', target: 'html', input: 'Nested' });
+  assert.equal(nested.ok, true, JSON.stringify(nested));
+  assert.match(nested.content, /Nested/);
+  return operation === 'template_text' ? 'Hello from Node' : null;
+});
+assert.equal(result.ok, true, JSON.stringify(result));
+assert.match(result.content, /Hello from Node/);
+assert(seen.some(([operation]) => operation === 'template_text'));
+assert('metadata' in result && 'diagnostics' in result);
+const failed = wiki.convert(request, () => { throw new Error('Node lookup failed'); });
+assert.equal(failed.ok, false, JSON.stringify(failed));
+assert.match(failed.error, /Node lookup failed/);
+console.log('Node callback success and failure verified');
