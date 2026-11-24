@@ -25,6 +25,8 @@ The [fixture manifest](namumark-baseline.json) fixes original hand-reviewed sema
 | Categories | `[[분류:Orchards]]`, optional `\|sort key` | Membership/index sort metadata. `[[:분류:Orchards]]` visible link. Blur excluded. |
 | Redirect | Standalone `#redirect Orchard` or `#넘겨주기 Orchard` | Metadata target with supported fragment; emit `#redirect`. Diagnose extra nonblank content instead of deleting silently. |
 
+Code mappings have delimiter limits when emitting NamuMark. An inline code value containing a newline or `}}}`, ending in `}`, ending in an odd number of backslashes, or beginning with `#` cannot use the profile's inline triple-brace form safely. Best effort emits escaped visible text and a located conversion loss for the lost code formatting; strict mode rejects it. A preformatted block can retain leading `#` text and blank lines, but content containing the literal closing sequence `}}}` falls back to escaped visible text with loss. These are output-representation limits, distinct from unclosed source delimiters.
+
 Standalone lists at document start are accepted by this converter profile. The snapshot mentions a preceding-content dependency near its comments section; this permissive rule is not a claim about live NamuWiki behavior.
 
 Tables, including simple rectangular tables, are excluded. Preserve the entire table visibly as escaped literal text with a located loss, rather than reading cells as another dialect. Also excluded: footnotes/references, quotations, media/files/video, includes and other macros, custom/numbered section anchors, HTML/CSS directives, folding, editor comments, advanced namespace/link options, and syntax only in the unprovided advanced/developer help. Recognized excluded constructs receive conversion-loss diagnostics even if their literal text survives.
@@ -41,6 +43,8 @@ Each pair below applies in both directions. The supported intersection preserves
 
 Translate category namespace spelling for membership and escaped category-page links. Other namespaces retain literal title semantics. NamuMark does not inherit MediaWiki first-letter capitalization, underscore normalization, link trails, or template evaluation. Diagnose mismatches when destination title rules change meaning.
 
+For NamuMark → MediaWiki, a page title containing MediaWiki delimiter characters such as `[]{}|` cannot be emitted as an active wiki target. Destination namespace/title normalization that changes a NamuMark target also requires an original-input loss location. Unsafe link targets remain visibly escaped literal text; unsafe category/redirect metadata is emitted visibly and escaped rather than activated as MediaWiki syntax, while the result retains the structured metadata. Strict mode rejects these losses. HTML/GFM imports targeting NamuMark use its own title policy: retain exact case, spaces, underscores, and escaped reserved characters instead of first applying MediaWiki title normalization. Validated HTML category/redirect transport likewise retains NamuMark spelling.
+
 ## Independent NamuMark context and URL policy
 
 - NamuMark input makes no network requests and invokes no template/page-existence/file callbacks. Includes/media remain excluded even if WikiData provides similarly named resources. Language/time do not expand macros or alter title spelling.
@@ -48,7 +52,7 @@ Translate category namespace spelling for membership and escaped category-page l
 - `/Child` appends to context.page_title. `../` chooses parent at last slash, or current title if none. Missing context is a located conversion loss, never a lookup. Explicit fragments are preserved; automatic `s-N` section anchors excluded because destination numbering differs.
 - Active external links allow only absolute http/https with nonempty authority, case-insensitive scheme, no controls/whitespace/quotes/angle brackets/backslashes/brackets. Rejected schemes and protocol-relative URLs stay visibly literal with conversion loss; never reinterpret rejected URL schemes as internal titles.
 - Plain HTML-looking NamuMark text is literal/escaped on HTML output. HTML directives are excluded with loss, not executed/imported. No raw-HTML passthrough.
-- Expansion limits retain their MediaWiki meaning. NamuMark consumes no template expansion counts/stacks; verify with callback spies. Malformed input must not panic/loop; record actual supported resource bounds in candidate evidence.
+- Expansion limits retain their MediaWiki meaning. NamuMark consumes no template expansion counts/stacks and invokes no wiki callbacks. Its inline parser bounds recursive nesting at 32 levels; deeper inline content falls back to visible text with a located nesting-limit conversion loss, rejected in strict mode. This is a NamuMark parser bound, independent of the caller's MediaWiki expansion budgets. It does not establish a general input-size or memory bound. Malformed input must not panic/loop.
 
 ## Located losses and malformed input
 

@@ -71,7 +71,9 @@ The syntax reference is the supplied r927/2026-11-24 help snapshot, whose local 
 
 MediaWiki-side comparisons use the existing pinned MediaWiki 1.46.2 archive, SHA-256 `8f7f937f8bbc1acd4cef1c5362a95f248dcd242020f2588798eb2f73ac2e69ba`, bundled Parsoid v0.23.1, and HTML 2.8.0. GFM output is checked with the existing `pulldown-cmark` test dependency against a fixed expected semantic tree under the published GFM reference. These are separate kinds of evidence; Parsoid does not establish NamuMark interpretation.
 
-Reproduce the local source checks with the following commands. The ignored bridge test requires the verified archive and a PHP runtime with the extensions described above; on Windows set `RWIKITEXT_PHP` to the absolute local executable path before running it.
+The source candidate is `17b2ce0b9352ebc62e51534a0c037217716bfb91`; the evidence below applies to that source revision and excludes the subsequent documentation-only evidence commit. On 2026-11-24, Windows x86-64 verification used Rust `1.100.0 (0ef1bc386 2026-11-09)` and PHP 8.4.27 VC2022 x64 with DOM, Intl, and Mbstring enabled.
+
+Reproduce the source checks with the following commands. The ignored bridge test requires the verified archive and a PHP runtime with the extensions described above; set `RWIKITEXT_PHP` to the absolute executable path when PHP is not available on `PATH`.
 
 ```sh
 cargo check --locked --all-targets
@@ -84,17 +86,61 @@ cargo test --locked -- --include-ignored --nocapture
 Get-FileHash docs/namumark_manual_r927_20261124.txt -Algorithm SHA256
 ```
 
-The independent reference suite exercises all six API directions against original fixtures, round trips starting in NamuMark and each other format, raw newline / `[br]` / CRLF semantics, category and redirect metadata, GFM body-only loss, and strict mode. Its ignored bridge test renders original MediaWiki, NamuMark-to-MediaWiki output, and a MediaWiki-origin round trip with actual pinned Parsoid. Additional core and CLI suites exercise unsupported/malformed input, located UTF-8 diagnostics, format restrictions, URL/context rules, and absence of NamuMark callbacks.
+The Windows verification run selected its local PHP runtime as follows before the complete test run. This runtime path belongs to the verification environment; a source checkout does not supply a PHP installation.
+
+```powershell
+$env:RWIKITEXT_PHP = (Resolve-Path target/tooling/php/php.exe).Path
+cargo test --locked -- --include-ignored --nocapture
+```
+
+The all-target check passed. The complete suite passed with **210 tests, zero failures, and zero ignored**, including the actual Parsoid bridge comparison and all existing MediaWiki regression tests. The generated local logs are `target/namumark-check-final.log` and `target/namumark-full-test.log`; they are not tracked repository artifacts.
+
+The independent reference suite exercises all six API directions against original fixtures, round trips starting in NamuMark and each other format, raw newline / `[br]` / CRLF semantics, category and redirect metadata, GFM body-only loss, and strict mode. A separate CLI test converts the original baseline fixture files through all six directions and compares their document meaning and metadata with the independently authored expectations. Its bridge test, ignored by default but executed in this full run, renders original MediaWiki, NamuMark-to-MediaWiki output, and a MediaWiki-origin round trip with actual pinned Parsoid. The fixture explicitly declares `Orchard` an existing page through the helper's optional known-page context, as recorded in the provenance manifest; the comparison does not strip missing-page edit-link query parameters to force agreement. Additional core and CLI suites exercise unsupported/malformed input, located UTF-8 diagnostics, format restrictions, URL/context rules, and absence of NamuMark callbacks.
+
+The full-run corpus audit classified 2,670 records: 695 DOM matches, 102 matches with diagnostics, 356 DOM differences, 381 context-dependent cases, 75 oracle-dependent cases, 234 alternate-mode cases, and 827 outside-release cases. A passing audit verifies those classifications and supported comparisons, not full MediaWiki conformance or resolution of every DOM difference. The historical baseline and [parser case inventory](parser-case-inventory.md) retain the scope and unresolved corpus limits.
 
 | Candidate evidence | Status |
 | --- | --- |
-| Exact expanded candidate commit | Pending final source commit |
+| Exact expanded source candidate commit | `17b2ce0b9352ebc62e51534a0c037217716bfb91`; subsequent documentation-only commit excluded |
 | Snapshot SHA-256 | Verified locally on 2026-11-24; exact hash above |
-| Rust all-target check and API/CLI baseline suites | Execution results pending |
-| Actual pinned Parsoid NamuMark/MediaWiki bridge comparison | Execution results pending; ignored by default |
-| Complete existing MediaWiki regression suite including ignored cases | Execution results pending |
-| C ABI and Python/Go examples on Linux GNU x86-64 | Execution results pending |
+| Rust all-target check and API/CLI baseline suites | Passed on Windows x86-64 with the toolchain above |
+| Actual pinned Parsoid NamuMark/MediaWiki bridge comparison | Passed in the complete run; ignored only when running the default suite |
+| Complete existing MediaWiki regression suite including ignored cases | Passed; complete suite 210 passed, zero failed, zero ignored |
+| C ABI and Python/Go/Java examples on Linux GNU x86-64 | Passed against the identical production tree described below; Go package tests also passed. Rust 1.100.0, GCC 12.2.0, Python 3.11.2, Go 1.26.11, and Temurin JDK 21.0.9 |
 | Other bindings, Linux ARM64, and musl candidate matrix | Not established by this local run; [#26](https://github.com/librewiki/rWikiText/issues/26) and [#27](https://github.com/librewiki/rWikiText/issues/27) remain release gates |
 | Live NamuWiki / independent executable NamuMark renderer | Not run; no renderer pinned |
 
-The profile excludes tables, footnotes, media, includes, most macros, advanced formatting, folding, and other syntax listed in the contract; fallback literals plus diagnostics are not support for their rendered meaning. NamuMark input performs no lookups or template expansion. Target-only losses may conservatively locate the entire original input where exact source ranges no longer survive the shared representation. Passing this subset's fixture checks does not establish full NamuWiki compatibility or complete the runtime/binding release matrix. Publication remains gated on the expanded candidate checks.
+The Linux GNU x86-64 native rerun built `68a26a44c51ebec692a23b32e013f05bc17de060` into `target/linux-gnu/release`. The final source candidate adds a CLI fixture verification test; `git diff --exit-code 68a26a44c51ebec692a23b32e013f05bc17de060 17b2ce0b9352ebc62e51534a0c037217716bfb91 -- src Cargo.toml Cargo.lock bindings include examples` passed, confirming identical production inputs. The native artifacts were not rebuilt at the test-only successor. C and Python examples, JNI compilation, Java compilation/execution, and the Go example/package tests exited successfully. The local logs are `target/namumark-bindings-final.log`, `target/namumark-bindings-c-python-jni-final.log`, `target/namumark-bindings-java-execution-final.log`, and `target/namumark-bindings-go-final.log`; these generated files are not tracked artifacts. The [native binding guide](native-bindings.md), [Python procedure](../bindings/python/README.md), [Java procedure](../bindings/java/README.md), and [Go procedure](../bindings/go/README.md) provide the normal native build/run commands. This rerun verifies those runtimes on GNU x86-64 only; Node.js, PHP, and Kotlin/Native runtime execution, ARM64, and musl remain unverified on this candidate.
+
+The rerun used `rust:bookworm` for the native library/C/Python, `gradle:8.14.3-jdk21` for Java, and `golang:1.26-bookworm` for Go, mounting the checkout at `/workspace`. These image tags identify the verification environments; they are not immutable image digests. The following native Linux commands reproduce the same build/output layout with matching installed tools. Java compilation needs a JDK including JNI headers. In the recorded run, those headers were copied into `target/java-gnu/jni-include` before the same JNI compile. The Go binding links the fixed `target/release/librwikitext.a` path, so copy the GNU archive there and force relinking after rebuilding it.
+
+```sh
+CARGO_TARGET_DIR=target/linux-gnu cargo build --locked --release --lib
+cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/convert.c \
+  target/linux-gnu/release/librwikitext.a -ldl -lpthread -lm -o /tmp/convert-c
+/tmp/convert-c
+python3 bindings/python/example.py "$PWD/target/linux-gnu/release/librwikitext.so"
+
+export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+mkdir -p target/java-gnu
+cc -shared -fPIC -Iinclude -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+  bindings/java/native/rwikitext_jni.c -Ltarget/linux-gnu/release -lrwikitext \
+  -Wl,-rpath,"$PWD/target/linux-gnu/release" -o target/java-gnu/librwikitext_jni.so
+javac -encoding UTF-8 -d target/java-gnu \
+  bindings/java/src/org/librewiki/rwikitext/WikiText.java bindings/java/Example.java
+java -Djava.library.path=target/java-gnu -cp target/java-gnu Example
+
+mkdir -p target/release
+cp target/linux-gnu/release/librwikitext.a target/release/
+cd bindings/go
+CGO_ENABLED=1 go run -a ./example
+CGO_ENABLED=1 go test -a ./...
+```
+
+The profile excludes tables, footnotes, media, includes, most macros, advanced formatting, folding, and other syntax listed in the contract; fallback literals plus diagnostics are not support for their rendered meaning. Output inline code additionally falls back with a loss for newline/closing-sequence collisions, terminal `}`, an odd trailing backslash count, or leading `#`. Preformatted blocks retain leading `#` and blank lines, but literal `}}}` in their content cannot be safely emitted and receives a loss. Best effort retains visible text while losing code/preformatted meaning; strict mode rejects the loss.
+
+NamuMark input performs no lookups or template expansion. Its independent inline recursion bound is 32 levels; deeper content produces a located nesting-limit loss, rejected by strict mode. Caller-supplied MediaWiki expansion budgets do not control this bound. No general input-size or memory bound is claimed.
+
+The candidate distinguishes NamuMark title spelling from MediaWiki normalization. HTML/GFM imports into NamuMark retain case, spaces, underscores, and escaped reserved title characters, and validated HTML metadata retains NamuMark spelling. NamuMark-to-MediaWiki title delimiter or namespace/normalization incompatibilities receive original-input loss locations. Unsafe metadata is rendered visibly and escaped while remaining available as structured metadata. Target-only losses may conservatively locate the entire original input where exact source ranges no longer survive the shared representation.
+
+The NamuMark interpretation checks use the independent manual-derived oracle; the actual Parsoid execution establishes MediaWiki-side rendering evidence. Passing these checks does not establish full NamuWiki compatibility or complete the runtime/binding release matrix. Publication remains gated on the expanded candidate checks.
