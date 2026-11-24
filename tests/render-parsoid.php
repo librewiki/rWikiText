@@ -25,7 +25,33 @@ $page = new MockPageConfig($site, [
     'pageLanguageDir' => 'ltr',
 ], $content);
 
-$parsoid = new Parsoid($site, new MockDataAccess($site, []));
+// Optional arguments declare pages that exist in this fixture's wiki context.
+// Without them, every lookup retains MockDataAccess's original behavior.
+$data = new class ($site, [], array_slice($argv, 5)) extends MockDataAccess {
+    private array $fixturePageIds;
+
+    public function __construct($site, array $opts, array $knownFixtureTitles) {
+        parent::__construct($site, $opts);
+        $this->fixturePageIds = [];
+        foreach ($knownFixtureTitles as $index => $title) {
+            $this->fixturePageIds[$title] = 1000000 + $index;
+        }
+    }
+
+    public function getPageInfo($pageConfigOrTitle, array $titles, bool $defaultLinkCaption = false): array {
+        $result = parent::getPageInfo($pageConfigOrTitle, $titles, $defaultLinkCaption);
+        foreach ($result as $title => &$info) {
+            if (isset($this->fixturePageIds[$title])) {
+                $info['known'] = true;
+                $info['missing'] = false;
+                $info['pageId'] = $this->fixturePageIds[$title];
+            }
+        }
+        unset($info);
+        return $result;
+    }
+};
+$parsoid = new Parsoid($site, $data);
 echo $parsoid->wikitext2html($page, [
     'body_only' => true,
     'wrapSections' => false,

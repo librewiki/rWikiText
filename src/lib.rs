@@ -235,7 +235,7 @@ pub fn convert_with_options(
 
     let mut diagnostics = Vec::new();
     let mut markup = wiki_markup::Markup::default();
-    let (document, page_metadata) = match request.source {
+    let (document, mut page_metadata) = match request.source {
         Format::Wikitext => prepare_wikitext(request, options, &mut markup, &mut diagnostics)?,
         Format::NamuMark => namumark::parse(request.input, request.context, request.target, &mut diagnostics),
         Format::Html => {
@@ -258,6 +258,11 @@ pub fn convert_with_options(
     };
 
     if request.target == Format::NamuMark {
+        if request.source == Format::Wikitext {
+            for sort in page_metadata.category_sort_keys.iter_mut().flatten() {
+                *sort = html_escape::decode_html_entities(sort).into_owned();
+            }
+        }
         if page_metadata.display_title.is_some() { diagnostics.push(Diagnostic::loss(0..request.input.len(), "NamuMark cannot carry display title metadata")); }
     }
     let separator = if request.target == Format::Html {

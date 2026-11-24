@@ -161,6 +161,9 @@ fn pinned_manifest_loss_cases_use_original_utf8_byte_ranges() {
 fn pinned_parsoid_confirms_namumark_mediawiki_bridge() {
     fn render(input: &str) -> String {
         let mut child = parsoid::parsoid_command(&CONTEXT)
+            // The independently authored fixture links to an existing wiki page.
+            // Declare that context rather than normalizing away Parsoid redlinks.
+            .arg("Orchard")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -48,6 +48,19 @@ fn redirect_target_and_fragment_keep_literal_spelling_through_html() {
 }
 
 #[test]
+fn ordinary_category_sort_punctuation_survives_mediawiki_round_trip() {
+    let input = "[[분류:Orchards|A_B]]";
+    let converted = run(Format::NamuMark, Format::Wikitext, input);
+    assert!(converted.diagnostics.is_empty(), "{:?}", converted.diagnostics);
+    assert_eq!(converted.metadata.categories, vec!["Orchards".to_owned()]);
+    assert_eq!(converted.metadata.category_sort_keys, vec![Some("A_B".to_owned())]);
+    let returned = run(Format::Wikitext, Format::NamuMark, &converted.content);
+    assert!(returned.diagnostics.is_empty(), "{:?}", returned.diagnostics);
+    assert_eq!(returned.metadata.categories, vec!["Orchards".to_owned()]);
+    assert_eq!(returned.metadata.category_sort_keys, vec![Some("A_B".to_owned())]);
+}
+
+#[test]
 fn inline_code_ending_in_backslash_has_visible_located_fallback() {
     let input = r"<p><code>x\</code></p>";
     let converted = run(Format::Html, Format::NamuMark, input);
