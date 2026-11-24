@@ -72,6 +72,65 @@ fn all_six_directions_match_independently_authored_semantic_fixture() {
 }
 
 #[test]
+fn cli_all_six_directions_match_independent_baseline_files() {
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let expected = body(EXPECTED);
+    for (source, target, fixture) in [
+        ("namumark", Wikitext, "namumark-baseline.namu"),
+        ("namumark", Gfm, "namumark-baseline.namu"),
+        ("namumark", Html, "namumark-baseline.namu"),
+        ("wikitext", NamuMark, "namumark-baseline.wiki"),
+        ("gfm", NamuMark, "namumark-baseline.gfm"),
+        ("html", NamuMark, "namumark-baseline.html"),
+    ] {
+        let target_token = match target {
+            Wikitext => "wikitext",
+            Gfm => "gfm",
+            Html => "html",
+            NamuMark => "namumark",
+        };
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_rwikitext"))
+            .args([source, target_token])
+            .arg(fixtures.join(fixture))
+            .args([
+                "--page-title",
+                CONTEXT.page_title,
+                "--site-language",
+                CONTEXT.site_language,
+                "--reference-time",
+                CONTEXT.reference_time,
+            ])
+            .output()
+            .expect("run rwikitext CLI with independent baseline fixture");
+        assert!(
+            output.status.success(),
+            "{source} -> {target:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{source} -> {target:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let content = String::from_utf8(output.stdout).expect("CLI output must be UTF-8");
+        let metadata_target = match target {
+            Gfm | Html => NamuMark,
+            _ => Html,
+        };
+        assert_eq!(
+            run(target, metadata_target, &content).metadata,
+            PageMetadata::default(),
+            "{source} -> {target:?} metadata"
+        );
+        assert_eq!(
+            rendered_body(target, &content),
+            expected,
+            "{source} -> {target:?}"
+        );
+    }
+}
+
+#[test]
 fn round_trips_starting_at_every_format_match_fixed_expected_meaning() {
     let expected = body(EXPECTED);
     for other in [Wikitext, Gfm, Html] {
