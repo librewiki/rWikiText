@@ -1,6 +1,6 @@
 # rWikiText
 
-rWikiText is a Rust parser for MediaWiki wikitext.
+rWikiText is a Rust document converter for MediaWiki wikitext, GFM, and HTML, with NamuMark support planned.
 
 ## Work lifecycle
 
@@ -28,7 +28,7 @@ Use the default triage labels. See `docs/agents/triage-labels.md` when assigning
 
 ### Domain docs
 
-Use the single-context layout. See `docs/agents/domain.md` before exploring the parser or making domain decisions.
+Use the single-context layout. See `docs/agents/domain.md` before exploring conversion or making domain decisions. For NamuMark syntax, implementation, or verification work, also read `docs/namumark.md`.
 
 ### README authoring
 

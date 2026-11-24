@@ -26,6 +26,8 @@ On Linux with musl, build with a matching musl Rust toolchain and C compiler. Us
 
 `source`, `target`, and `input` are required strings. The format names are `wikitext`, `gfm`, and `html`. Every supported conversion has wikitext on one side.
 
+NamuMark format selection and conversion are planned and not yet exposed by this ABI or the bindings. See the [NamuMark implementation and release plan](namumark.md).
+
 ```json
 {
   "source": "wikitext",

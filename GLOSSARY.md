@@ -1,8 +1,16 @@
-# MediaWiki wikitext conversion
+# Wiki document conversion
 
-rWikiText converts MediaWiki documents between wikitext, GitHub Flavored Markdown (GFM), and HTML.
+rWikiText's document-conversion domain includes MediaWiki wikitext, NamuMark, GitHub Flavored Markdown (GFM), and HTML.
 
 ## Language
+
+**MediaWiki wikitext**
+
+The wiki markup language interpreted by MediaWiki. In this project, the unqualified term "wikitext" refers to MediaWiki wikitext.
+
+**NamuMark (나무마크)**
+
+The wiki markup language used by NamuWiki, distinct from MediaWiki wikitext.
 
 **Document meaning**
 
