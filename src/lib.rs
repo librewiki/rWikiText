@@ -6,6 +6,8 @@ mod html;
 mod html_policy;
 mod inline;
 mod metadata;
+mod namumark;
+mod namumark_output;
 mod table;
 mod transclusion;
 mod wiki_data;
@@ -28,6 +30,7 @@ pub enum Format {
     Wikitext,
     Gfm,
     Html,
+    NamuMark,
 }
 
 impl FromStr for Format {
@@ -35,6 +38,7 @@ impl FromStr for Format {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "wikitext" => Ok(Self::Wikitext),
+            "namumark" => Ok(Self::NamuMark),
             "gfm" => Ok(Self::Gfm),
             "html" => Ok(Self::Html),
             _ => Err(ConversionError::new(format!("unknown format: {value}"))),
@@ -223,16 +227,19 @@ pub fn convert_with_options(
         (request.source, request.target),
         (Format::Wikitext, Format::Gfm | Format::Html)
             | (Format::Gfm | Format::Html, Format::Wikitext)
+            | (Format::NamuMark, Format::Wikitext | Format::Gfm | Format::Html)
+            | (Format::Wikitext | Format::Gfm | Format::Html, Format::NamuMark)
     ) {
         return Err(ConversionError::new("unsupported conversion direction"));
     }
 
     let mut diagnostics = Vec::new();
     let mut markup = wiki_markup::Markup::default();
-    let (document, page_metadata) = match request.source {
+    let (document, mut page_metadata) = match request.source {
         Format::Wikitext => prepare_wikitext(request, options, &mut markup, &mut diagnostics)?,
+        Format::NamuMark => namumark::parse(request.input, request.context, request.target, &mut diagnostics),
         Format::Html => {
-            let metadata = metadata::extract_html(request.input, request.context)?;
+            let metadata = if request.target == Format::NamuMark { metadata::extract_html_for_namumark(request.input, request.context)? } else { metadata::extract_html(request.input, request.context)? };
             let document = parse_html(
                 &metadata.body,
                 request.input,
@@ -240,15 +247,24 @@ pub fn convert_with_options(
                 &mut markup,
                 options.wiki_data,
                 &mut diagnostics,
+                request.target == Format::NamuMark,
             )?;
             (document, metadata.metadata)
         }
         Format::Gfm => (
-            parse_gfm(request.input, options.wiki_data, &mut diagnostics)?,
+            parse_gfm(request.input, options.wiki_data, &mut diagnostics, request.target == Format::NamuMark)?,
             PageMetadata::default(),
         ),
     };
 
+    if request.target == Format::NamuMark {
+        if request.source == Format::Wikitext {
+            for sort in page_metadata.category_sort_keys.iter_mut().flatten() {
+                *sort = html_escape::decode_html_entities(sort).into_owned();
+            }
+        }
+        if page_metadata.display_title.is_some() { diagnostics.push(Diagnostic::loss(0..request.input.len(), "NamuMark cannot carry display title metadata")); }
+    }
     let separator = if request.target == Format::Html {
         "\n"
     } else {
@@ -258,6 +274,12 @@ pub fn convert_with_options(
     let mut previous_list: Option<(bool, bool)> = None;
     let mut blocks = Vec::new();
     for block in document.blocks {
+        if request.target == Format::NamuMark {
+            let (rendered, loss) = namumark_output::render_block(&block);
+            if loss { diagnostics.push(Diagnostic::loss(0..request.input.len(), "NamuMark cannot represent this source structure or formatting")); }
+            if !rendered.is_empty() { blocks.push(rendered); }
+            continue;
+        }
         let alternate = if let Block::Core(block) = &block {
             core::list_type(block).map(|ordered| {
                 let alternate = previous_list.is_some_and(|(last, alt)| last == ordered && !alt);
@@ -280,6 +302,7 @@ pub fn convert_with_options(
                         render_inline(text, Format::Wikitext)
                     )
                 }
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => format!(
                     "{} {}",
                     "#".repeat(*level as usize),
@@ -306,12 +329,15 @@ pub fn convert_with_options(
         }
     }
     let encoded_metadata = match request.target {
+        Format::Wikitext if request.source == Format::NamuMark => namumark::render_wikitext_metadata(&page_metadata),
         Format::Wikitext => metadata::render_wikitext(&page_metadata),
+        Format::Html if request.source == Format::NamuMark => metadata::render_html_for_namumark(&page_metadata),
         Format::Html => metadata::render_html(&page_metadata),
         Format::Gfm => String::new(),
+        Format::NamuMark => { let (text, loss) = namumark_output::render_metadata(&page_metadata); if loss && page_metadata.display_title.is_none() { diagnostics.push(Diagnostic::loss(0..request.input.len(), "NamuMark cannot represent this page metadata")); } text },
     };
     if !encoded_metadata.is_empty() {
-        if page_metadata.redirect_target.is_some() && request.target == Format::Wikitext {
+        if page_metadata.redirect_target.is_some() && matches!(request.target, Format::Wikitext | Format::NamuMark) {
             blocks.insert(0, encoded_metadata);
         } else {
             blocks.push(encoded_metadata);
@@ -348,6 +374,9 @@ fn prepare_wikitext(
         options.wiki_data,
         options.expansion_limits,
     )?;
+    if request.target == Format::NamuMark {
+        for invocation in &expanded.invocations { diagnostics.push(Diagnostic::loss(invocation.source_range.clone(), "NamuMark cannot preserve MediaWiki transclusion identity")); }
+    }
     let expanded_span = |span| expanded.original_span(span);
     let metadata = metadata::extract_wikitext(&expanded.text, request.input, request.context)?;
     let body_span = |span| expanded_span(original_range(span, &metadata.ranges));
@@ -447,6 +476,10 @@ fn prepare_wikitext(
         }
     }
     for link in links {
+        if request.target == Format::NamuMark {
+            diagnostics.push(Diagnostic::loss(sanitized_span(link.range.clone()), "NamuMark cannot represent MediaWiki file or link metadata"));
+            continue;
+        }
         if let Some(loss) = link.loss {
             diagnostics.push(Diagnostic::loss(sanitized_span(link.range.clone()), loss));
         }
@@ -793,12 +826,15 @@ fn render_inline(content: &[Inline], format: Format) -> String {
         match part {
             Inline::Html(html) => match format {
                 Format::Wikitext => output.push_str(&html_to_wiki(html)),
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 _ => output.push_str(html),
             },
             Inline::Emphasis { strong, children } => {
                 let (open, close) = match (format, strong) {
                     (Format::Html, true) => ("<b>", "</b>"),
                     (Format::Html, false) => ("<i>", "</i>"),
+                    (Format::NamuMark, true) => ("'''", "'''"),
+                    (Format::NamuMark, false) => ("''", "''"),
                     (Format::Wikitext, true) => ("'''", "'''"),
                     (Format::Wikitext, false) => ("''", "''"),
                     (Format::Gfm, true) => ("**", "**"),
@@ -823,6 +859,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                         output.is_empty() || output.ends_with('\n'),
                     ));
                 }
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => output.push_str(&escape_gfm(text)),
                 Format::Html => output.push_str(&html_escape::encode_text(text)),
             },
@@ -853,6 +890,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                     html_policy::escape_wiki_attribute_value(href),
                     render_inline(label, format)
                 )),
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => output.push_str(&format!(
                     "[{}](<{}>)",
                     render_inline(label, format),

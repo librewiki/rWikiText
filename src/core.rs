@@ -174,12 +174,14 @@ pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
     match block {
         Block::Rule => match format {
             Format::Wikitext => "----",
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Gfm => "---",
             Format::Html => "<hr>",
         }
         .into(),
         Block::RuleWithText(text) => match format {
             Format::Wikitext => format!("----{}", crate::render_inline(text, format)),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Gfm => {
                 let rendered = crate::render_inline(text, format);
                 let leading = rendered.bytes().take_while(|b| *b == b' ').count();
@@ -193,6 +195,7 @@ pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
                 .map(|line| format!(" {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Html => format!("<pre>{}</pre>", html_escape::encode_text(text)),
             Format::Gfm => format!("<pre>{}</pre>", html_escape::encode_text(text)),
         },
@@ -202,6 +205,7 @@ pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
                 .map(|line| format!(" {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Html | Format::Gfm => {
                 format!("<pre>{}</pre>", crate::render_inline(content, Format::Html))
             }

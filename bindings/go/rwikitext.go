@@ -25,6 +25,7 @@ type Format string
 
 const (
 	Wikitext Format = "wikitext"
+	NamuMark Format = "namumark"
 	GFM      Format = "gfm"
 	HTML     Format = "html"
 )
