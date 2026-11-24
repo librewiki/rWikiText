@@ -4,6 +4,8 @@ rWikiText is a Rust library and command-line tool for converting MediaWiki wikit
 
 Use it to move wiki documents into Markdown or HTML workflows, import documents into a wiki, or embed conversion in an application. The library returns converted content, structured page metadata, and diagnostics that identify conversion losses by byte range in the original input.
 
+NamuMark (나무마크) is an additional planned input and output format for the first public release. Its parser and converters are not implemented yet. See the [NamuMark scope and implementation plan](docs/namumark.md).
+
 ## Quick start
 
 Build from a source checkout with a current Rust toolchain, Cargo, and the linker for your Rust target. The Rust library and CLI run locally with caller-supplied wiki data. Check the native binding guide for the additional tools each binding requires. [Native binding requirements](docs/native-bindings.md)
@@ -17,6 +19,8 @@ cargo run --locked -- wikitext html tests/fixtures/paragraphs.wiki
 Standard output contains two `<p>` elements. The second contains `Second paragraph &amp; more.`
 
 ## Conversion scope
+
+The following describes the currently implemented MediaWiki conversions.
 
 - Convert in both directions between wikitext and GFM or between wikitext and HTML. Each conversion takes wikitext as either its input or its output.
 - Convert core document structure, including paragraphs, headings, links, emphasis, preformatted text, horizontal rules, lists, and tables. GFM uses native Markdown tables where possible and HTML for structures such as merged cells.
@@ -93,4 +97,4 @@ For contributions, follow the repository's issue, branch, and pull request workf
 
 ## License
 
-rWikiText is licensed under the [MIT License](LICENSE).
+rWikiText's code is licensed under the [MIT License](LICENSE). The supplied NamuWiki help snapshot is separately licensed under CC BY-NC-SA 2.0 KR; see [third-party notices](docs/THIRD_PARTY_NOTICES.md).

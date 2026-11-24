@@ -1,5 +1,9 @@
 # Compatibility baseline
 
+## Implemented MediaWiki baseline
+
+The results below cover the implemented MediaWiki conversions. NamuMark is a planned first-release addition with no pinned or verified compatibility baseline yet. Its independent reference and release work are tracked in the [NamuMark plan](namumark.md); the MediaWiki results do not establish NamuMark support.
+
 The implementation baseline as of 2026-11-17 is [MediaWiki 1.46.2](https://www.mediawiki.org/wiki/Release_notes/1.46), including Parsoid v0.23.1 with [Parsoid HTML 2.8.0](https://www.mediawiki.org/wiki/Specs/HTML/2.8.0) as its default HTML version. The Rust tests render Markdown against the [GitHub Flavored Markdown specification, version 0.29-gfm](https://github.github.com/gfm/).
 
 Download and check the exact MediaWiki archive with Python 3.12 or newer, then run the selected upstream parser cases with Cargo.
@@ -35,6 +39,8 @@ The verified parser-function subset covers Unicode case conversion, padding, tem
 HTML template recovery supports standalone and inline transclusion groups with validated targets and arguments. Transclusions that generate partial tags, link targets, or combined blocks can render as content with a conversion-loss diagnostic for the invocation.
 
 ## First-release verification
+
+This section records the existing MediaWiki verification procedure and historical results. The expanded release also requires NamuMark verification and binding checks against the resulting candidate, as tracked in [#49](https://github.com/librewiki/rWikiText/issues/49), [#26](https://github.com/librewiki/rWikiText/issues/26), and [#27](https://github.com/librewiki/rWikiText/issues/27).
 
 Use a PHP executable with the extensions listed above and run the complete suite, including the tests that require local upstream files.
 

@@ -1,0 +1,2 @@
+# Preserve the user-supplied third-party reference byte for byte, including whitespace.
+docs/namumark_manual_r927_20261124.txt -text whitespace=-blank-at-eol,-blank-at-eof
