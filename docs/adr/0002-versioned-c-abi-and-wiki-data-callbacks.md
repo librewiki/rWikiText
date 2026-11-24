@@ -8,6 +8,8 @@ Each conversion request supplies its input and output formats, wiki context, and
 
 The test CLI uses the same document conversion API. It selects one of the four directions, reads input from a file or standard input, and serves wiki context and lookup responses from local test data. It writes converted content to standard output and diagnostics to standard error.
 
+The four directions above describe the implemented MediaWiki contract. The [NamuMark scope amendment](0001-parsoid-and-document-fidelity.md#scope-amendment-namumark-2026-11-24) adds planned directions that must be exposed consistently through the shared API and bindings. Preserve existing ABI behavior and version incompatible changes; NamuMark context and callback semantics are defined by its own baseline.
+
 ## First-release Linux runtime checks
 
 | C runtime | Architectures | Bindings |
