@@ -16,13 +16,13 @@ The [fixture manifest](namumark-baseline.json) fixes original hand-reviewed sema
 | Headings | One to six matched equals signs, spaces inside, complete line: `== Orchard ==` | Preserve level/inline contents. Folded headings excluded; malformed heading-shaped lines diagnosed. |
 | Emphasis | Two/three apostrophes for italic/bold, balanced combinations | Preserve emphasis nesting. Unclosed markers diagnosed. Other formatting excluded. |
 | Escape | Backslash before one character | Escape one character, not whole delimiters; trailing backslash literal. Never reinterpret escaped syntax in later stages. |
-| Links | `[[Orchard]]`, `[[Orchard|visit]]`, `[[https://example.org/a|visit]]` | Same label/destination under independent policy below. Supported inline labels, no nested links/media. |
+| Links | `[[Orchard]]`, `[[Orchard\|visit]]`, `[[https://example.org/a\|visit]]` | Same label/destination under independent policy below. Supported inline labels, no nested links/media. |
 | Inline literal | Triple braces without newline/directive | Literal monospaced content, no nested evaluation. |
 | Literal block | Untyped triple-brace opener/closer on separate lines | Preserve preformatted content/newlines. HTML/wiki/syntax/color/size directives excluded. |
 | Lists | Top-level ` * item` and ` 1. item` | One leading space and space after marker. Nested/mixed/continuation lists and other numbering excluded. |
 | Break | `[br]` | Explicit line break, the sole supported macro. |
 | Rule | Whole line of four to nine hyphens, optional leading spaces | Emit `----`; three/ten hyphens remain plain text. |
-| Categories | `[[분류:Orchards]]`, optional `|sort key` | Membership/index sort metadata. `[[:분류:Orchards]]` visible link. Blur excluded. |
+| Categories | `[[분류:Orchards]]`, optional `\|sort key` | Membership/index sort metadata. `[[:분류:Orchards]]` visible link. Blur excluded. |
 | Redirect | Standalone `#redirect Orchard` or `#넘겨주기 Orchard` | Metadata target with supported fragment; emit `#redirect`. Diagnose extra nonblank content instead of deleting silently. |
 
 Standalone lists at document start are accepted by this converter profile. The snapshot mentions a preceding-content dependency near its comments section; this permissive rule is not a claim about live NamuWiki behavior.

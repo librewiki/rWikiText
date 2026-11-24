@@ -35,6 +35,7 @@ fn api(source: Format, target: Format, input: &str) -> String {
 fn format_name(format: Format) -> &'static str {
     match format {
         Format::Wikitext => "wikitext",
+        Format::NamuMark => "namumark",
         Format::Gfm => "gfm",
         Format::Html => "html",
     }

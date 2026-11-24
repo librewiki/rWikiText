@@ -1,0 +1,10 @@
+{
+  "files": ["namumark-baseline.namu", "namumark-baseline.wiki", "namumark-baseline.gfm", "namumark-baseline.html"],
+  "author": "Codex for rWikiText",
+  "date": "2026-11-24",
+  "license": "MIT",
+  "origin": "Original fixtures with original names, prose, and code, hand-authored from docs/namumark.md baseline v1 and its pinned syntax-help snapshot before core implementation. No copied/adapted help-page examples.",
+  "oracle": "The .html document tree and metadata expectations are independently authored; not generated from rWikiText. This is a snapshot-derived semantic oracle, not a real NamuMark renderer capture.",
+  "reference_sha256": "520eedc1f02128f0e4eb35c044bdd466ad7e9fc51458b565942ca0b681f9b608",
+  "external_evidence": "The ignored pinned_parsoid_confirms_namumark_mediawiki_bridge test must actually run with the pinned MediaWiki 1.46.2/Parsoid HTML 2.8.0 runtime to establish MediaWiki-side renderer evidence. No external NamuMark execution is claimed."
+}

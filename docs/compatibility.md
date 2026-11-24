@@ -2,7 +2,7 @@
 
 ## Implemented MediaWiki baseline
 
-The results below cover the implemented MediaWiki conversions. NamuMark is a planned first-release addition with no pinned or verified compatibility baseline yet. Its independent reference and release work are tracked in the [NamuMark plan](namumark.md); the MediaWiki results do not establish NamuMark support.
+The historical results below cover their recorded MediaWiki candidate. The expanded NamuMark contract and its independently authored expectations are documented separately in the [NamuMark contract](namumark.md) and [candidate verification](#namumark-candidate-verification); the historical MediaWiki results do not establish NamuMark compatibility.
 
 The implementation baseline as of 2026-11-17 is [MediaWiki 1.46.2](https://www.mediawiki.org/wiki/Release_notes/1.46), including Parsoid v0.23.1 with [Parsoid HTML 2.8.0](https://www.mediawiki.org/wiki/Specs/HTML/2.8.0) as its default HTML version. The Rust tests render Markdown against the [GitHub Flavored Markdown specification, version 0.29-gfm](https://github.github.com/gfm/).
 
@@ -62,3 +62,39 @@ The 2026-11-17 verification run on Linux x86_64 used Rust 1.100.0 and PHP 8.4.15
 | HTML policy, invalid Parsoid metadata, and strict mode | `conversion`, `tables`, and `parsoid_transclusion` check element, attribute, and URL handling, general HTML import, validated template recovery, and errors with original input byte ranges. Strict mode rejects conversion loss and still reports HTML removals that preserve document meaning. CLI tests check output and diagnostics on their separate streams. |
 | Callback outcomes and reproducibility | `transclusion`, `wiki_links`, and `functions` cover synchronous caller-thread lookups, found and missing data, fatal lookup errors, and repeatable CLI conversions with local wiki data. |
 | Expansion bounds | `transclusion` checks separate depth, count, and UTF-8 output-byte limits with located diagnostics. It also checks an expansion that reaches the configured limits and nested parameter expansion with empty output. |
+
+## NamuMark candidate verification
+
+Baseline v1 was fixed before core implementation on 2026-11-24 for [#47](https://github.com/librewiki/rWikiText/issues/47). [#48](https://github.com/librewiki/rWikiText/issues/48) adds the six NamuMark directions through shared Rust, CLI, C ABI, and bindings; [#49](https://github.com/librewiki/rWikiText/issues/49) tracks candidate evidence. Existing four directions remain unchanged in scope. Identity and direct GFM ↔ HTML remain unsupported.
+
+The syntax reference is the supplied r927/2026-11-24 help snapshot, whose local SHA-256 is `520eedc1f02128f0e4eb35c044bdd466ad7e9fc51458b565942ca0b681f9b608`. The revision identification was supplied by the user and has not been independently checked online. The [baseline manifest](namumark-baseline.json) and [original test fixtures](../tests/fixtures/namumark-baseline.provenance.json) contain hand-authored expected meaning, fixed independently of rWikiText output. They are a snapshot-derived oracle; no real NamuMark renderer execution or captured render comparison is claimed. The [contract](namumark.md) lists exclusions and the independent NamuMark context, URL, loss, and strict-mode policies.
+
+MediaWiki-side comparisons use the existing pinned MediaWiki 1.46.2 archive, SHA-256 `8f7f937f8bbc1acd4cef1c5362a95f248dcd242020f2588798eb2f73ac2e69ba`, bundled Parsoid v0.23.1, and HTML 2.8.0. GFM output is checked with the existing `pulldown-cmark` test dependency against a fixed expected semantic tree under the published GFM reference. These are separate kinds of evidence; Parsoid does not establish NamuMark interpretation.
+
+Reproduce the local source checks with the following commands. The ignored bridge test requires the verified archive and a PHP runtime with the extensions described above; on Windows set `RWIKITEXT_PHP` to the absolute local executable path before running it.
+
+```sh
+cargo check --locked --all-targets
+cargo test --locked --test namumark --test namumark_cli --test namumark_reference
+cargo test --locked --test namumark_reference pinned_parsoid_confirms_namumark_mediawiki_bridge -- --ignored --nocapture
+cargo test --locked -- --include-ignored --nocapture
+```
+
+```powershell
+Get-FileHash docs/namumark_manual_r927_20261124.txt -Algorithm SHA256
+```
+
+The independent reference suite exercises all six API directions against original fixtures, round trips starting in NamuMark and each other format, raw newline / `[br]` / CRLF semantics, category and redirect metadata, GFM body-only loss, and strict mode. Its ignored bridge test renders original MediaWiki, NamuMark-to-MediaWiki output, and a MediaWiki-origin round trip with actual pinned Parsoid. Additional core and CLI suites exercise unsupported/malformed input, located UTF-8 diagnostics, format restrictions, URL/context rules, and absence of NamuMark callbacks.
+
+| Candidate evidence | Status |
+| --- | --- |
+| Exact expanded candidate commit | Pending final source commit |
+| Snapshot SHA-256 | Verified locally on 2026-11-24; exact hash above |
+| Rust all-target check and API/CLI baseline suites | Execution results pending |
+| Actual pinned Parsoid NamuMark/MediaWiki bridge comparison | Execution results pending; ignored by default |
+| Complete existing MediaWiki regression suite including ignored cases | Execution results pending |
+| C ABI and Python/Go examples on Linux GNU x86-64 | Execution results pending |
+| Other bindings, Linux ARM64, and musl candidate matrix | Not established by this local run; [#26](https://github.com/librewiki/rWikiText/issues/26) and [#27](https://github.com/librewiki/rWikiText/issues/27) remain release gates |
+| Live NamuWiki / independent executable NamuMark renderer | Not run; no renderer pinned |
+
+The profile excludes tables, footnotes, media, includes, most macros, advanced formatting, folding, and other syntax listed in the contract; fallback literals plus diagnostics are not support for their rendered meaning. NamuMark input performs no lookups or template expansion. Target-only losses may conservatively locate the entire original input where exact source ranges no longer survive the shared representation. Passing this subset's fixture checks does not establish full NamuWiki compatibility or complete the runtime/binding release matrix. Publication remains gated on the expanded candidate checks.

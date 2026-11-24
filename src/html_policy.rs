@@ -610,14 +610,16 @@ impl Sanitized {
 }
 
 pub(crate) fn sanitize(input: &str, wikitext: bool) -> Sanitized {
-    sanitize_inner(input, wikitext, &[])
+    sanitize_inner(input, wikitext, &[], false)
 }
 
 pub(crate) fn sanitize_wikitext(input: &str, invocations: &[Range<usize>]) -> Sanitized {
-    sanitize_inner(input, true, invocations)
+    sanitize_inner(input, true, invocations, false)
 }
 
-fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>]) -> Sanitized {
+pub(crate) fn sanitize_namumark(input: &str) -> Sanitized { sanitize_inner(input, false, &[], true) }
+
+fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>], namumark: bool) -> Sanitized {
     let mut output = String::new();
     let mut diagnostics = Vec::new();
     let mut replacements = Vec::new();
@@ -670,7 +672,7 @@ fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>]) -> 
             }
         }
         let start = output.len();
-        let length = sanitize_token(&input[pos..], pos, wikitext, &mut output, &mut diagnostics);
+        let length = sanitize_token(&input[pos..], pos, wikitext, namumark, &mut output, &mut diagnostics);
         if output.len() - start != length {
             replacements.push((pos..pos + length, start..output.len()));
         }
@@ -700,6 +702,7 @@ fn sanitize_token(
     rest: &str,
     pos: usize,
     wikitext: bool,
+    namumark: bool,
     output: &mut String,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> usize {
@@ -842,7 +845,7 @@ fn sanitize_token(
                 ));
             }
         } else if allowed_attr(name, key)
-            && safe_attr(name, key, &value)
+            && (safe_attr(name, key, &value) || (namumark && name == "a" && key == "href" && crate::namumark::internal_transport(&value)))
             && scoped
             && seen.insert(key)
             && !key.contains(['\'', '"', '\0', '<'])

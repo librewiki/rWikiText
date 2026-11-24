@@ -131,7 +131,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if !(2..=3).contains(&positional.len()) {
-        return Err("usage: rwikitext <wikitext|gfm|html> <wikitext|gfm|html> [FILE|-] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]".into());
+        return Err("usage: rwikitext <wikitext|gfm|html|namumark> <wikitext|gfm|html|namumark> [FILE|-] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]".into());
     }
     let source: Format = positional[0].parse()?;
     let target: Format = positional[1].parse()?;

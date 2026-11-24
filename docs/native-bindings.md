@@ -24,9 +24,9 @@ On Linux with musl, build with a matching musl Rust toolchain and C compiler. Us
 
 ## Conversion request
 
-`source`, `target`, and `input` are required strings. The format names are `wikitext`, `gfm`, and `html`. Every supported conversion has wikitext on one side.
+`source`, `target`, and `input` are required strings. The format names are `wikitext`, `gfm`, `html`, and `namumark`. NamuMark can be converted to or from each other format. Wikitext can also be converted to or from GFM and HTML. Identity conversions and direct GFM ↔ HTML conversions are unsupported.
 
-NamuMark format selection and conversion are planned and not yet exposed by this ABI or the bindings. See the [NamuMark implementation and release plan](namumark.md).
+The `namumark` identifier is additive to ABI version 1; it changes no existing symbol or callback operation number. NamuMark input does not expand MediaWiki templates or invoke wiki-data callbacks. Expansion limits apply to MediaWiki expansion. See the [NamuMark conversion contract](namumark.md) for syntax, independent context and URL policy, and limitations.
 
 ```json
 {

@@ -1,6 +1,6 @@
 # rWikiText for Go
 
-Convert MediaWiki wikitext to and from GitHub Flavored Markdown (GFM) or HTML in a Go application. The `rwikitext` package uses cgo to call the version 1 C ABI and returns converted content, page metadata, and diagnostics as Go types. Applications can provide wiki data through Go functions, including for offline conversions. [Native bindings guide](../../docs/native-bindings.md)
+Convert NamuMark to and from MediaWiki wikitext, GitHub Flavored Markdown (GFM), or HTML, or convert wikitext to and from GFM or HTML in a Go application. The `rwikitext` package uses cgo to call the version 1 C ABI and returns converted content, page metadata, and diagnostics as Go types. Applications can provide wiki data through Go functions, including for offline conversions. [Native bindings guide](../../docs/native-bindings.md)
 
 ## Quick start
 
@@ -36,7 +36,7 @@ The `replace` directive points Go at the local checkout. Adjust the path to matc
 
 ## Conversion and callbacks
 
-Call `Convert(source, target, input, options)` with `Wikitext` and either `GFM` or `HTML` in one of the two directions. Pass `Options{}` for the default wiki context, best-effort mode, and default expansion limits. Set `Options.Mode` to `Strict` to fail on conversion loss.
+Call `Convert(source, target, input, options)` with `NamuMark` and any of `Wikitext`, `GFM`, or `HTML` in either direction, or with `Wikitext` and either `GFM` or `HTML` in either direction. Pass `Options{}` for the default wiki context, best-effort mode, and default expansion limits. Set `Options.Mode` to `Strict` to fail on conversion loss.
 
 Set `Options.Context` to supply the page title, site language, and reference time. The binding sends reference times in UTC at whole-second precision. Set fields in `Options.ExpansionLimits` to bound expansion depth, count, and output bytes. A nil limit uses the native default, and a pointer to zero sets the limit to zero.
 

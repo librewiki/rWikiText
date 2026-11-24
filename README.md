@@ -1,10 +1,10 @@
 # rWikiText
 
-rWikiText is a Rust library and command-line tool for converting MediaWiki wikitext to and from GitHub Flavored Markdown (GFM) and HTML.
+rWikiText is a Rust library and command-line tool for converting documents between MediaWiki wikitext, NamuMark, GitHub Flavored Markdown (GFM), and HTML.
 
 Use it to move wiki documents into Markdown or HTML workflows, import documents into a wiki, or embed conversion in an application. The library returns converted content, structured page metadata, and diagnostics that identify conversion losses by byte range in the original input.
 
-NamuMark (나무마크) is an additional planned input and output format for the first public release. Its parser and converters are not implemented yet. See the [NamuMark scope and implementation plan](docs/namumark.md).
+NamuMark (나무마크) has a deliberately small first-release conversion profile with located diagnostics for unsupported syntax. Its syntax reference and independent hand-reviewed fixtures are pinned; live NamuWiki renderer compatibility remains unverified. See the [NamuMark contract and exclusions](docs/namumark.md) and [candidate verification](docs/compatibility.md#namumark-candidate-verification).
 
 ## Quick start
 
@@ -20,7 +20,7 @@ Standard output contains two `<p>` elements. The second contains `Second paragra
 
 ## Conversion scope
 
-The following describes the currently implemented MediaWiki conversions.
+The format pairs are MediaWiki wikitext ↔ GFM, MediaWiki wikitext ↔ HTML, and NamuMark ↔ each of the other three formats. Identity conversions and direct GFM ↔ HTML are unsupported. The following describes the MediaWiki conversions.
 
 - Convert in both directions between wikitext and GFM or between wikitext and HTML. Each conversion takes wikitext as either its input or its output.
 - Convert core document structure, including paragraphs, headings, links, emphasis, preformatted text, horizontal rules, lists, and tables. GFM uses native Markdown tables where possible and HTML for structures such as merged cells.
@@ -29,6 +29,8 @@ The following describes the currently implemented MediaWiki conversions.
 - Apply MediaWiki rules for elements, attributes, and URLs to embedded and imported HTML. Best-effort conversion reports losses and removals. Strict mode fails on conversion loss.
 
 Compatibility is based on MediaWiki 1.46.2 and Parsoid HTML 2.8.0. Round-trip fidelity concerns rendered content, document structure, and page metadata. Equivalent wikitext can differ in spelling and whitespace. The first-release scope excludes MediaWiki extension tags and parser functions. See the verified cases and remaining differences in the [compatibility baseline](docs/compatibility.md) and [parser case inventory](docs/parser-case-inventory.md).
+
+The NamuMark profile covers text, headings, bold/italic, links, escaping, literal code, top-level lists, line breaks, rules, categories, and redirects. Tables, footnotes, media, includes, and other macros are diagnosed as conversion losses. NamuMark input uses its own URL and page-title rules and makes no wiki data callbacks. Its reference fixtures are separate from the MediaWiki/Parsoid compatibility evidence. [NamuMark details](docs/namumark.md)
 
 ## Usage
 
@@ -58,11 +60,11 @@ fn main() -> Result<(), rwikitext::ConversionError> {
 }
 ```
 
-Use `convert_with_mode` with `ConversionMode::Strict` to reject conversion loss. Use `convert_with_options` to supply a `WikiData` implementation and adjust `ExpansionLimits`. The library calls back synchronously on the calling thread for template text, page existence, and file information. A lookup can return data, report missing data, or fail the conversion with a located diagnostic. [Rust API](src/lib.rs) · [Callbacks and expansion limits](src/wiki_data.rs)
+Use `Format::NamuMark` to select NamuMark. Use `convert_with_mode` with `ConversionMode::Strict` to reject conversion loss. Use `convert_with_options` to supply a `WikiData` implementation and adjust `ExpansionLimits`. For MediaWiki input, the library calls back synchronously on the calling thread for template text, page existence, and file information. A lookup can return data, report missing data, or fail the conversion with a located diagnostic. [Rust API](src/lib.rs) · [Callbacks and expansion limits](src/wiki_data.rs)
 
 ### Command-line tool
 
-Pass the source and target formats as `wikitext`, `gfm`, or `html`. Omit the file path or use `-` to read standard input. The CLI writes converted content to standard output and diagnostics to standard error. Add `--strict` to exit with status 1 on conversion loss.
+Pass the source and target formats as `wikitext`, `namumark`, `gfm`, or `html`, using a supported pair above. Omit the file path or use `-` to read standard input. The CLI writes converted content to standard output and diagnostics to standard error. Add `--strict` to exit with status 1 on conversion loss.
 
 Use `--wiki-data` to load offline wiki lookups from a JSON file. The optional `context`, `templates`, `pages`, and `files` objects supply wiki context, template text, page-existence booleans, and file records with a URL and optional dimensions in pixels. Omit a lookup title or use `null` for missing data. Use an object with an `error` string to simulate a lookup failure. [Example wiki data](tests/fixtures/wiki-data.json)
 
