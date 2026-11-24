@@ -20,6 +20,7 @@ On Linux with musl, build with a matching musl Rust toolchain and C compiler. Us
 - [Java](../bindings/java/README.md)
 - [Kotlin/Native](../bindings/kotlin-native/README.md)
 - [Node.js](../bindings/node/README.md)
+- [Go](../bindings/go/README.md)
 
 ## Conversion request
 
