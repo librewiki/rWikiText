@@ -34,6 +34,13 @@ fn inline_text(parts: &[Inline]) -> (String, bool) {
                 let content = html_escape::decode_html_entities(&html[6..html.len() - 7]);
                 if content.contains("}}}")
                     || content.ends_with('}')
+                    || content
+                        .bytes()
+                        .rev()
+                        .take_while(|&byte| byte == b'\\')
+                        .count()
+                        % 2
+                        == 1
                     || content.contains('\n')
                     || content.starts_with('#')
                 {
@@ -148,7 +155,7 @@ pub(crate) fn render_block(block: &Block) -> (String, bool) {
 }
 
 fn pre(text: &str) -> (String, bool) {
-    if text.contains("}}}") || text.starts_with('#') {
+    if text.contains("}}}") {
         (escape(text), true)
     } else {
         (format!("{{{{{{\n{text}\n}}}}}}"), false)
@@ -177,8 +184,9 @@ pub(crate) fn render_metadata(metadata: &PageMetadata) -> (String, bool) {
             parts.push(escape(&format!("[[분류:{category}]]")));
         } else {
             parts.push(format!(
-                "[[분류:{category}{}]]",
-                sort.map(|s| format!("|{s}")).unwrap_or_default()
+                "[[분류:{}{}]]",
+                escape(category),
+                sort.map(|s| format!("|{}", escape(s))).unwrap_or_default()
             ));
         }
     }

@@ -69,3 +69,145 @@ fn code_ending_in_closing_brace_reports_loss_and_keeps_text() {
     };
     assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
 }
+
+#[test]
+fn namumark_html_metadata_round_trip_keeps_exact_titles_and_sort_keys() {
+    let context = WikiContext::default();
+    for input in [
+        "[[분류:orchard_tree|sort key]]",
+        "#redirect orchard_tree#lower_part",
+        "[[분류:orchard tree|sort key]]",
+    ] {
+        let first = convert_with_mode(
+            ConversionRequest {
+                source: Format::NamuMark,
+                target: Format::Html,
+                input,
+                context: &context,
+            },
+            ConversionMode::Strict,
+        )
+        .unwrap();
+        let second = convert_with_mode(
+            ConversionRequest {
+                source: Format::Html,
+                target: Format::NamuMark,
+                input: &first.content,
+                context: &context,
+            },
+            ConversionMode::Strict,
+        )
+        .unwrap();
+        assert_eq!(second.metadata, first.metadata, "{}", first.content);
+        let third = convert_with_mode(
+            ConversionRequest {
+                source: Format::NamuMark,
+                target: Format::Html,
+                input: &second.content,
+                context: &context,
+            },
+            ConversionMode::Strict,
+        )
+        .unwrap();
+        assert_eq!(third.metadata, first.metadata, "{}", second.content);
+    }
+}
+
+#[test]
+fn code_ending_in_backslash_reports_loss_without_malformed_output() {
+    let input = "<p><code>x\\</code></p>";
+    let result = from_html(input);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == rwikitext::DiagnosticKind::ConversionLoss),
+        "{:?}",
+        result
+    );
+    let request = ConversionRequest {
+        source: Format::Html,
+        target: Format::NamuMark,
+        input,
+        context: &WikiContext::default(),
+    };
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+    let restored = convert(ConversionRequest {
+        source: Format::NamuMark,
+        target: Format::Html,
+        input: &result.content,
+        context: &WikiContext::default(),
+    })
+    .unwrap();
+    assert!(restored.diagnostics.is_empty(), "{:?}", restored);
+    assert!(restored.content.contains("x\\"), "{}", restored.content);
+}
+
+#[test]
+fn category_backslashes_survive_namumark_html_round_trip() {
+    let context = WikiContext::default();
+    let input = r"[[분류:orchard\\grove|sort\\key]]";
+    let first = convert_with_mode(
+        ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    let second = convert_with_mode(
+        ConversionRequest {
+            source: Format::Html,
+            target: Format::NamuMark,
+            input: &first.content,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    let third = convert_with_mode(
+        ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input: &second.content,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert_eq!(third.metadata, first.metadata, "{}", second.content);
+}
+
+#[test]
+fn preformatted_hash_line_round_trips_without_loss() {
+    let context = WikiContext::default();
+    let original = "<pre>#orchard</pre>";
+    let converted = convert_with_mode(
+        ConversionRequest {
+            source: Format::Html,
+            target: Format::NamuMark,
+            input: original,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert!(converted.diagnostics.is_empty());
+    let restored = convert_with_mode(
+        ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input: &converted.content,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert!(
+        restored.content.contains("<pre>#orchard</pre>"),
+        "{}",
+        restored.content
+    );
+}

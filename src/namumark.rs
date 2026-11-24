@@ -24,6 +24,29 @@ pub(crate) fn parse(
     while let Some(raw) = lines.next() {
         let line = raw.trim_end_matches('\n').trim_end_matches('\r');
         let span = offset..offset + line.len();
+        if line.starts_with("{{{#!") && !line.contains("}}}") {
+            flush(&mut blocks, &mut paragraph, &mut list);
+            let start = offset;
+            let mut consumed = raw.len();
+            let mut end = offset + line.len();
+            while let Some(next) = lines.next() {
+                let text = next.trim_end_matches('\n').trim_end_matches('\r');
+                end = offset + consumed + text.len();
+                consumed += next.len();
+                if text.contains("}}}") {
+                    break;
+                }
+            }
+            diagnostics.push(Diagnostic::loss(
+                start..end,
+                "unsupported NamuMark directive",
+            ));
+            blocks.push(Block::Paragraph(vec![Inline::Text(
+                input[start..end].into(),
+            )]));
+            offset += consumed;
+            continue;
+        }
         if line == "{{{" {
             flush(&mut blocks, &mut paragraph, &mut list);
             let start = offset;
@@ -127,6 +150,29 @@ pub(crate) fn parse(
             .or_else(|| line.strip_prefix("#넘겨주기 "))
         {
             flush(&mut blocks, &mut paragraph, &mut list);
+            if metadata.redirect_target.is_some() {
+                diagnostics.push(Diagnostic::loss(
+                    span.clone(),
+                    "additional NamuMark redirect",
+                ));
+                blocks.push(Block::Paragraph(vec![Inline::Text(line.into())]));
+                offset += raw.len();
+                continue;
+            }
+            if target == Format::Wikitext
+                && (invalid_wiki_title(title) || changes_wiki_title(title))
+            {
+                diagnostics.push(Diagnostic::loss(
+                    span.clone(),
+                    "MediaWiki cannot preserve this redirect title",
+                ));
+            }
+            if target == Format::Html && invalid_wiki_title(title) {
+                diagnostics.push(Diagnostic::loss(
+                    span.clone(),
+                    "HTML metadata transport cannot preserve this redirect title",
+                ));
+            }
             metadata.redirect_target = Some(title.to_owned());
             if target == Format::Gfm {
                 diagnostics.push(Diagnostic::loss(
@@ -139,7 +185,7 @@ pub(crate) fn parse(
                 || line.starts_with("##")
                 || line.starts_with("  * ")
                 || line.starts_with("  1. ")
-                || (line.starts_with('=') && line.ends_with('='))
+                || line.starts_with('=')
             {
                 diagnostics.push(Diagnostic::loss(
                     span.clone(),
@@ -246,7 +292,25 @@ fn inlines(
                 });
                 let full = "[[분류:".len() + end + 2;
                 if !name.is_empty() && !name.contains("[[") && !name.contains("#blur") {
-                    metadata.categories.push(unescape(name));
+                    let name = unescape(name);
+                    if target == Format::Wikitext
+                        && (invalid_wiki_title(&name) || changes_wiki_title(&name))
+                    {
+                        diagnostics.push(Diagnostic::loss(
+                            base + i..base + i + full,
+                            "MediaWiki cannot preserve this category title",
+                        ));
+                    }
+                    if target == Format::Html
+                        && (invalid_wiki_title(&name)
+                            || sort.as_ref().is_some_and(|s| invalid_metadata_sort(s)))
+                    {
+                        diagnostics.push(Diagnostic::loss(
+                            base + i..base + i + full,
+                            "HTML metadata transport cannot preserve this category",
+                        ));
+                    }
+                    metadata.categories.push(name);
                     metadata.category_sort_keys.push(sort);
                     if target == Format::Gfm {
                         diagnostics.push(Diagnostic::loss(
@@ -317,6 +381,20 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
+                if target == Format::Wikitext
+                    && !external
+                    && title
+                        .chars()
+                        .any(|c| matches!(c, '[' | ']' | '{' | '}' | '|'))
+                {
+                    diagnostics.push(Diagnostic::loss(
+                        base + i..base + i + end + 4,
+                        "MediaWiki cannot represent the NamuMark link title",
+                    ));
+                    inline::text(&mut out, &rest[..end + 4]);
+                    i += end + 4;
+                    continue;
+                }
                 let resolved = if let Some(child) = title.strip_prefix('/') {
                     if context.page_title.is_empty() {
                         diagnostics.push(Diagnostic::loss(
@@ -345,6 +423,13 @@ fn inlines(
                     }
                 } else {
                     title.to_owned()
+                };
+                let resolved = if target == Format::Wikitext {
+                    resolved
+                        .strip_prefix(":분류:")
+                        .map_or(resolved.clone(), |name| format!(":Category:{name}"))
+                } else {
+                    resolved
                 };
                 let href = if external {
                     resolved
@@ -477,16 +562,6 @@ fn inlines(
     out
 }
 
-pub(crate) fn escape(text: &str) -> String {
-    let mut out = String::new();
-    for c in text.chars() {
-        if matches!(c, '\\' | '[' | ']' | '{' | '}' | '\'' | '=') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
 fn find_unescaped(input: &str, needle: &str) -> Option<usize> {
     let mut pos = 0;
     while pos < input.len() {
@@ -531,4 +606,47 @@ pub(crate) fn internal_transport(href: &str) -> bool {
         return false;
     }
     inline::decode_component(href).is_ok_and(|decoded| !decoded.chars().any(char::is_control))
+}
+
+fn invalid_wiki_title(title: &str) -> bool {
+    title.trim().is_empty()
+        || title
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>' | '?'))
+}
+fn invalid_metadata_sort(sort: &str) -> bool {
+    sort.chars()
+        .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>'))
+}
+fn changes_wiki_title(title: &str) -> bool {
+    title.contains('_') || title.starts_with(|c: char| c.is_lowercase())
+}
+pub(crate) fn render_wikitext_metadata(metadata: &PageMetadata) -> String {
+    let mut parts = Vec::new();
+    if let Some(title) = &metadata.redirect_target {
+        if invalid_wiki_title(title) {
+            parts.push(crate::escape_wikitext(&format!("#redirect {title}")));
+        } else {
+            parts.push(format!("#REDIRECT [[{title}]]"));
+        }
+    }
+    for (i, name) in metadata.categories.iter().enumerate() {
+        let sort = metadata
+            .category_sort_keys
+            .get(i)
+            .and_then(|s| s.as_deref());
+        if invalid_wiki_title(name) {
+            parts.push(crate::escape_wikitext(&format!(
+                "[[분류:{name}{}]]",
+                sort.map(|s| format!("|{s}")).unwrap_or_default()
+            )));
+        } else {
+            parts.push(format!(
+                "[[Category:{name}{}]]",
+                sort.map(|s| format!("|{}", crate::escape_wikitext(s)))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    parts.join("\n")
 }

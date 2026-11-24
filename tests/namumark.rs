@@ -126,3 +126,26 @@ fn namumark_literal_block_preserves_blank_lines() {
     let result = convert(ConversionRequest { source: Format::NamuMark, target: Format::Html, input, context: &context }).unwrap();
     assert_eq!(result.content, "<pre>\nseed\n</pre>");
 }
+
+#[test]
+fn mediawiki_rejects_unrepresentable_namumark_link_title() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext::default(); let input = r"[[Orchard\|Gate|visit]]";
+    let request = ConversionRequest { source: Format::NamuMark, target: Format::Wikitext, input, context: &context };
+    let result = convert(request).unwrap();
+    assert!(result.diagnostics.iter().any(|d| d.span == (0..input.len())));
+    assert!(!result.content.contains("[[Orchard|Gate|visit]]"));
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+}
+
+#[test]
+fn mediawiki_metadata_never_activates_namumark_title_markup() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext::default(); let input = "[[분류:Orchard{{bad}}]]";
+    let request = ConversionRequest { source: Format::NamuMark, target: Format::Wikitext, input, context: &context };
+    let result = convert(request).unwrap();
+    assert_eq!(result.metadata.categories, vec!["Orchard{{bad}}"]);
+    assert!(result.diagnostics.iter().any(|d| d.span == (0..input.len())));
+    assert!(!result.content.contains("{{bad}}"));
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+}

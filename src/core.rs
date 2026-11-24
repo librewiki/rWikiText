@@ -173,13 +173,15 @@ pub(crate) fn list_type(block: &Block) -> Option<bool> {
 pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
     match block {
         Block::Rule => match format {
-            Format::Wikitext | Format::NamuMark => "----",
+            Format::Wikitext => "----",
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Gfm => "---",
             Format::Html => "<hr>",
         }
         .into(),
         Block::RuleWithText(text) => match format {
-            Format::Wikitext | Format::NamuMark => format!("----{}", crate::render_inline(text, format)),
+            Format::Wikitext => format!("----{}", crate::render_inline(text, format)),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Gfm => {
                 let rendered = crate::render_inline(text, format);
                 let leading = rendered.bytes().take_while(|b| *b == b' ').count();
@@ -188,28 +190,26 @@ pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
             Format::Html => format!("<hr><p>{}</p>", crate::render_inline(text, format)),
         },
         Block::Pre(text) => match format {
-            Format::Wikitext | Format::NamuMark => crate::escape_wikitext(text)
+            Format::Wikitext => crate::escape_wikitext(text)
                 .split('\n')
                 .map(|line| format!(" {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Html => format!("<pre>{}</pre>", html_escape::encode_text(text)),
             Format::Gfm => format!("<pre>{}</pre>", html_escape::encode_text(text)),
         },
         Block::WikiPre(content) => match format {
-            Format::Wikitext | Format::NamuMark => crate::render_inline(content, format)
+            Format::Wikitext => crate::render_inline(content, format)
                 .split('\n')
                 .map(|line| format!(" {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
             Format::Html | Format::Gfm => {
                 format!("<pre>{}</pre>", crate::render_inline(content, Format::Html))
             }
         },
-        Block::List(lines) if format == Format::NamuMark => lines.iter().map(|line| {
-            let marker = if line.markers == "#" { " 1. " } else { " * " };
-            format!("{}{}", marker, crate::render_inline(&line.content, format))
-        }).collect::<Vec<_>>().join("\n"),
         Block::List(lines) if format == Format::Wikitext => lines
             .iter()
             .map(|line| {

@@ -239,7 +239,7 @@ pub fn convert_with_options(
         Format::Wikitext => prepare_wikitext(request, options, &mut markup, &mut diagnostics)?,
         Format::NamuMark => namumark::parse(request.input, request.context, request.target, &mut diagnostics),
         Format::Html => {
-            let metadata = metadata::extract_html(request.input, request.context)?;
+            let metadata = if request.target == Format::NamuMark { metadata::extract_html_for_namumark(request.input, request.context)? } else { metadata::extract_html(request.input, request.context)? };
             let document = parse_html(
                 &metadata.body,
                 request.input,
@@ -290,13 +290,14 @@ pub fn convert_with_options(
                 format => render_inline(text, format),
             },
             Block::Heading { level, text } => match request.target {
-                Format::Wikitext | Format::NamuMark => {
+                Format::Wikitext => {
                     let delimiter = "=".repeat(*level as usize);
                     format!(
                         "{delimiter} {} {delimiter}",
                         render_inline(text, Format::Wikitext)
                     )
                 }
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => format!(
                     "{} {}",
                     "#".repeat(*level as usize),
@@ -314,9 +315,7 @@ pub fn convert_with_options(
             Block::Core(block) => {
                 core::render(block, request.target, alternate.is_some_and(|(_, alt)| alt))
             }
-            Block::Table(table) if request.target == Format::NamuMark => namumark::escape(&table.render(Format::Html)?),
             Block::Table(table) => table.render(request.target)?,
-            Block::Html(html) if request.target == Format::NamuMark => namumark::escape(html),
             Block::Html(html) if request.target == Format::Wikitext => html_to_wiki(html),
             Block::Html(html) => embedded_html(html, request.context.site_language),
         };
@@ -325,7 +324,9 @@ pub fn convert_with_options(
         }
     }
     let encoded_metadata = match request.target {
+        Format::Wikitext if request.source == Format::NamuMark => namumark::render_wikitext_metadata(&page_metadata),
         Format::Wikitext => metadata::render_wikitext(&page_metadata),
+        Format::Html if request.source == Format::NamuMark => metadata::render_html_for_namumark(&page_metadata),
         Format::Html => metadata::render_html(&page_metadata),
         Format::Gfm => String::new(),
         Format::NamuMark => { let (text, loss) = namumark_output::render_metadata(&page_metadata); if loss && page_metadata.display_title.is_none() { diagnostics.push(Diagnostic::loss(0..request.input.len(), "NamuMark cannot represent this page metadata")); } text },
@@ -820,8 +821,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
         match part {
             Inline::Html(html) => match format {
                 Format::Wikitext => output.push_str(&html_to_wiki(html)),
-                Format::NamuMark if html.eq_ignore_ascii_case("<br>") || html.eq_ignore_ascii_case("<br />") => output.push_str("[br]"),
-                Format::NamuMark => output.push_str(&namumark::escape(html)),
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 _ => output.push_str(html),
             },
             Inline::Emphasis { strong, children } => {
@@ -854,7 +854,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                         output.is_empty() || output.ends_with('\n'),
                     ));
                 }
-                Format::NamuMark => output.push_str(&namumark::escape(text)),
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => output.push_str(&escape_gfm(text)),
                 Format::Html => output.push_str(&html_escape::encode_text(text)),
             },
@@ -885,10 +885,7 @@ fn render_inline(content: &[Inline], format: Format) -> String {
                     html_policy::escape_wiki_attribute_value(href),
                     render_inline(label, format)
                 )),
-                Format::NamuMark => {
-                    let target = if *internal { inline::decode_component(href.strip_prefix("./").unwrap_or(href)).unwrap_or_else(|_| href.clone()) } else { href.clone() };
-                    output.push_str(&format!("[[{}|{}]]", target, render_inline(label, format)));
-                },
+                Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
                 Format::Gfm => output.push_str(&format!(
                     "[{}](<{}>)",
                     render_inline(label, format),
