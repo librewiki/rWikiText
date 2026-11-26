@@ -184,6 +184,14 @@ pub(crate) const PROTOCOLS: &[&str] = &[
     "//",
 ];
 
+pub(crate) fn has_http_scheme(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || url
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+}
+
 pub(crate) fn external_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     PROTOCOLS.iter().any(|prefix| {
@@ -263,9 +271,7 @@ fn safe_attr(tag: &str, name: &str, value: &str) -> bool {
         .collect();
     match name {
         "src" => {
-            (value.starts_with('/')
-                || value.to_ascii_lowercase().starts_with("http://")
-                || value.to_ascii_lowercase().starts_with("https://"))
+            (value.starts_with('/') || has_http_scheme(value))
                 && (external_url(value) || value.starts_with('/') && !value.starts_with("//"))
                 && !value.chars().any(|ch| {
                     ch.is_whitespace() || ch.is_control() || matches!(ch, '<' | '>' | '"' | '\\')
@@ -510,7 +516,7 @@ pub(crate) fn sanitize_tag_attributes(name: &str, attrs: &str) -> (String, Vec<D
             )],
         );
     }
-    let sanitized = sanitize(&source, true);
+    let sanitized = sanitize(&source, HtmlPolicy::Wikitext);
     let attributes = sanitized
         .text
         .strip_prefix(&open)
@@ -609,17 +615,33 @@ impl Sanitized {
     }
 }
 
-pub(crate) fn sanitize(input: &str, wikitext: bool) -> Sanitized {
-    sanitize_inner(input, wikitext, &[], false)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HtmlPolicy {
+    Wikitext,
+    MediaWikiImport,
+    NamuMarkImport,
+}
+
+impl HtmlPolicy {
+    pub(crate) fn is_wikitext(self) -> bool {
+        self == Self::Wikitext
+    }
+
+    pub(crate) fn is_namumark_import(self) -> bool {
+        self == Self::NamuMarkImport
+    }
+}
+
+pub(crate) fn sanitize(input: &str, policy: HtmlPolicy) -> Sanitized {
+    sanitize_inner(input, policy, &[])
 }
 
 pub(crate) fn sanitize_wikitext(input: &str, invocations: &[Range<usize>]) -> Sanitized {
-    sanitize_inner(input, true, invocations, false)
+    sanitize_inner(input, HtmlPolicy::Wikitext, invocations)
 }
 
-pub(crate) fn sanitize_namumark(input: &str) -> Sanitized { sanitize_inner(input, false, &[], true) }
-
-fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>], namumark: bool) -> Sanitized {
+fn sanitize_inner(input: &str, policy: HtmlPolicy, invocations: &[Range<usize>]) -> Sanitized {
+    let wikitext = policy.is_wikitext();
     let mut output = String::new();
     let mut diagnostics = Vec::new();
     let mut replacements = Vec::new();
@@ -672,7 +694,7 @@ fn sanitize_inner(input: &str, wikitext: bool, invocations: &[Range<usize>], nam
             }
         }
         let start = output.len();
-        let length = sanitize_token(&input[pos..], pos, wikitext, namumark, &mut output, &mut diagnostics);
+        let length = sanitize_token(&input[pos..], pos, policy, &mut output, &mut diagnostics);
         if output.len() - start != length {
             replacements.push((pos..pos + length, start..output.len()));
         }
@@ -701,11 +723,12 @@ pub(crate) fn raw_close(input: &str, name: &str) -> Option<(usize, usize)> {
 fn sanitize_token(
     rest: &str,
     pos: usize,
-    wikitext: bool,
-    namumark: bool,
+    policy: HtmlPolicy,
     output: &mut String,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> usize {
+    let wikitext = policy.is_wikitext();
+    let namumark = policy.is_namumark_import();
     if let Some(comment) = rest.strip_prefix("<!--") {
         return comment.find("-->").map_or(rest.len(), |n| n + 7);
     }

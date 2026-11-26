@@ -1,6 +1,6 @@
 use crate::{
     inline::{self, Inline},
-    parse_html_inlines, render_inline, ConversionError, Diagnostic, Format,
+    parse_html_inlines, render_inline, ConversionError, Diagnostic, HtmlStyle, RenderTarget,
 };
 use scraper::{ElementRef, Node};
 
@@ -125,16 +125,16 @@ fn render_cell_wiki(content: &[Inline]) -> Result<String, ConversionError> {
             let mut elements = doc.root_element().children().filter_map(ElementRef::wrap);
             if let Some(element) = elements.next() {
                 if element.value().name() == "table" && elements.next().is_none() {
-                    result.push_str(&render_inline(&content[last..index], Format::Wikitext));
+                    result.push_str(&render_inline(&content[last..index], RenderTarget::Wikitext));
                     result.push('\n');
-                    result.push_str(&Table::from_html(element)?.render(Format::Wikitext)?);
+                    result.push_str(&Table::from_html(element)?.render(RenderTarget::Wikitext)?);
                     result.push('\n');
                     last = index + 1;
                 }
             }
         }
     }
-    result.push_str(&render_inline(&content[last..], Format::Wikitext));
+    result.push_str(&render_inline(&content[last..], RenderTarget::Wikitext));
     Ok(result)
 }
 
@@ -211,7 +211,7 @@ impl Table {
                 let nested = Self::parse_wiki(&nested_lines.join("\n"), language)?;
                 table.losses.extend(nested.losses.iter().cloned());
                 cell.content
-                    .push(Inline::Html(nested.render(Format::Html)?));
+                    .push(Inline::Html(nested.render(RenderTarget::Html(HtmlStyle::Parsoid))?));
                 continue;
             }
             if line.trim() == "|}" {
@@ -365,7 +365,7 @@ impl Table {
         Ok(table)
     }
 
-    pub(crate) fn render(&self, format: Format) -> Result<String, ConversionError> {
+    pub(crate) fn render(&self, target: RenderTarget) -> Result<String, ConversionError> {
         let native = self.attrs.is_empty()
             && self.row_attrs.iter().all(String::is_empty)
             && self.caption.is_none()
@@ -384,13 +384,13 @@ impl Table {
                     && !inline::plain(&c.content).contains('\n')
                     && !contains_block_html(&c.content)
             });
-        if format == Format::Gfm && native {
+        if target == RenderTarget::Gfm && native {
             let row = |cells: &[Cell]| {
                 format!(
                     "| {} |",
                     cells
                         .iter()
-                        .map(|c| render_inline(&c.content, Format::Gfm))
+                        .map(|c| render_inline(&c.content, RenderTarget::Gfm))
                         .collect::<Vec<_>>()
                         .join(" | ")
                 )
@@ -402,7 +402,7 @@ impl Table {
             output.extend(self.rows.iter().skip(1).map(|r| row(r)));
             return Ok(output.join("\n"));
         }
-        if format == Format::Wikitext {
+        if target == RenderTarget::Wikitext {
             let attr = crate::html_policy::escape_wiki_attribute_markup;
             let mut output = format!("{{|{}", attr(&self.attrs));
             if let Some(caption) = &self.caption {
@@ -414,7 +414,7 @@ impl Table {
                     } else {
                         " |"
                     },
-                    render_inline(caption, format)
+                    render_inline(caption, RenderTarget::Wikitext)
                 ));
             }
             for (row, attrs) in self.rows.iter().zip(&self.row_attrs) {
@@ -439,12 +439,13 @@ impl Table {
             output.push_str("\n|}");
             return Ok(output);
         }
+        let html_target = RenderTarget::Html(target.html_style());
         let mut output = format!("<table{}>", self.attrs);
         if let Some(caption) = &self.caption {
             output.push_str(&format!(
                 "<caption{}>{}</caption>",
                 self.caption_attrs,
-                render_inline(caption, Format::Html)
+                render_inline(caption, html_target)
             ));
         }
         output.push_str("<tbody>");
@@ -460,7 +461,7 @@ impl Table {
                     output.push_str(&format!(" rowspan=\"{}\"", cell.rowspan));
                 }
                 output.push('>');
-                output.push_str(&render_inline(&cell.content, Format::Html));
+                output.push_str(&render_inline(&cell.content, html_target));
                 output.push_str(&format!("</{tag}>"));
             }
             output.push_str("</tr>");

@@ -214,7 +214,7 @@ pub(crate) fn redlink(title: &str, format: Format) -> String {
     let href = format!("./{}", inline::encode_component(title));
     let title = title.replace('_', " ");
     if format == Format::Gfm {
-        return format!("[{}](<{}>)", crate::escape_gfm(&title), href);
+        return format!("[{}](<{}>)", crate::escape_ascii_punctuation(&title), href);
     }
     format!("<a rel=\"mw:WikiLink\" href=\"{}?action=edit&amp;redlink=1\" title=\"{}\" class=\"new\" typeof=\"mw:LocalizedAttrs\">{}</a>",
         html_escape::encode_double_quoted_attribute(&href),

@@ -90,7 +90,12 @@ fn display_size(
 fn html_label(label: &str, language: &str) -> Option<String> {
     inline::parse_wiki(label, language)
         .ok()
-        .map(|parts| crate::render_inline(&parts, Format::Html))
+        .map(|parts| {
+            crate::render_inline(
+                &parts,
+                crate::RenderTarget::Html(crate::HtmlStyle::Parsoid),
+            )
+        })
 }
 
 fn caption_html(
