@@ -1,6 +1,6 @@
 # rWikiText
 
-rWikiText is a Rust document converter for MediaWiki wikitext, GFM, and HTML, with NamuMark support planned.
+rWikiText is a Rust document converter for MediaWiki wikitext, NamuMark, GFM, and HTML. The NamuMark first-release profile is implemented; see the [domain docs](docs/agents/domain.md) for remaining scope and verification work.
 
 ## Work lifecycle
 

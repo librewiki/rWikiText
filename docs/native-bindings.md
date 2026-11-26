@@ -28,7 +28,7 @@ On Linux with musl, build with a matching musl Rust toolchain and C compiler. Us
 
 The `namumark` identifier is additive to ABI version 1; it changes no existing symbol or callback operation number. NamuMark input does not expand MediaWiki templates or invoke wiki-data callbacks. Expansion limits apply to MediaWiki expansion. See the [NamuMark conversion contract](namumark.md) for syntax, independent context and URL policy, and limitations.
 
-NamuMark format selection and conversion are planned and not yet exposed by this ABI or the bindings. See the [NamuMark implementation and release plan](namumark.md).
+NamuMark format selection and conversion are exposed through ABI version 1 and the language bindings in every supported direction.
 
 ```json
 {
