@@ -17,7 +17,7 @@ fn namumark_paragraph_converts_to_html() {
 fn namumark_heading_and_emphasis_convert_to_html() {
     let context = WikiContext::default();
     let result = convert(ConversionRequest { source: Format::NamuMark, target: Format::Html, input: "== 제목 ==\n\n'''bold''' and ''italic''", context: &context }).unwrap();
-    assert_eq!(result.content, "<h2 id=\"제목\">제목</h2>\n<p><b>bold</b> and <i>italic</i></p>");
+    assert_eq!(result.content, "<h2 id=\"제목\">제목</h2>\n<p><strong>bold</strong> and <em>italic</em></p>");
 }
 
 #[test]
@@ -543,4 +543,212 @@ fn namumark_relative_fragment_regression_guards_stay_byte_identical() {
             "target {target:?} input {input}"
         );
     }
+}
+
+#[test]
+fn namumark_mixed_unordered_and_ordered_lists_emit_loss_and_fail_strict() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    for (input, expected_span) in [
+        (" * a\n 1. b", 5..10),
+        (" 1. a\n * b", 6..10),
+        ("배\n\n * a\n 1. b", 10..15),
+    ] {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert!(
+            result.diagnostics.iter().any(|d| {
+                d.kind == DiagnosticKind::ConversionLoss && d.span == expected_span
+            }),
+            "input {input:?}: {:?}",
+            result.diagnostics
+        );
+        assert!(result.content.contains("a"), "input {input:?}");
+        assert!(result.content.contains("b"), "input {input:?}");
+        assert!(
+            convert_with_mode(request, ConversionMode::Strict).is_err(),
+            "input {input:?}"
+        );
+    }
+}
+
+#[test]
+fn namumark_alternate_list_numbering_and_nested_lists_emit_loss_and_fail_strict() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    for input in [
+        " a. alpha",
+        " A. upper",
+        " i. roman",
+        " I. ROMAN",
+        " 2. second",
+        " 10. tenth",
+        " 1.#5 start five",
+        " I.#11 start eleven",
+        "   * deeply nested",
+    ] {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert!(
+            result.diagnostics.iter().any(|d| {
+                d.kind == DiagnosticKind::ConversionLoss && d.span == (0..input.len())
+            }),
+            "input {input:?}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.content.contains(input.trim()),
+            "input {input:?}: {}",
+            result.content
+        );
+        assert!(
+            convert_with_mode(request, ConversionMode::Strict).is_err(),
+            "input {input:?}"
+        );
+    }
+}
+
+#[test]
+fn namumark_list_continuation_lines_emit_loss_and_fail_strict() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    let input = " * first\n continued\n still continued";
+    let request = ConversionRequest {
+        source: Format::NamuMark,
+        target: Format::Html,
+        input,
+        context: &context,
+    };
+    let result = convert(request).unwrap();
+    let losses: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::ConversionLoss)
+        .collect();
+    assert_eq!(losses.len(), 2, "{:?}", result.diagnostics);
+    assert_eq!(losses[0].span, 9..19);
+    assert_eq!(losses[1].span, 20..36);
+    assert!(result.content.contains("first"));
+    assert!(result.content.contains("continued"));
+    assert!(result.content.contains("still continued"));
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+}
+
+#[test]
+fn namumark_basic_single_level_lists_and_separated_lists_convert_cleanly() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext::default();
+    for (input, expected) in [
+        (" * Apricot\n * Quince", "<ul><li>Apricot</li><li>Quince</li></ul>"),
+        (" 1. First\n 1. Second", "<ol><li>First</li><li>Second</li></ol>"),
+        (
+            " * Apricot\n\n 1. First",
+            "<ul><li>Apricot</li></ul>\n<ol><li>First</li></ol>",
+        ),
+        (
+            " * Apricot\nAfter list",
+            "<ul><li>Apricot</li></ul>\n<p>After list</p>",
+        ),
+    ] {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "input {input:?}");
+        assert!(
+            result.diagnostics.is_empty(),
+            "input {input:?}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            convert_with_mode(request, ConversionMode::Strict).is_ok(),
+            "input {input:?}"
+        );
+    }
+}
+
+#[test]
+fn namumark_html_emphasis_uses_semantic_tags_while_wikitext_preserves_parsoid_tags() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext::default();
+    let namu_input = "== '''Title''' ==\n\n * ''item''\n\n'''''both''''' and [[Orchard|'''visit''']]";
+    let namu_html = convert_with_mode(
+        ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input: namu_input,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert!(
+        namu_html.content.contains("<strong>Title</strong>"),
+        "{}",
+        namu_html.content
+    );
+    assert!(
+        namu_html.content.contains("<li><em>item</em></li>"),
+        "{}",
+        namu_html.content
+    );
+    assert!(
+        namu_html.content.contains("<em><strong>both</strong></em>"),
+        "{}",
+        namu_html.content
+    );
+    assert!(
+        namu_html.content.contains("<strong>visit</strong></a>"),
+        "{}",
+        namu_html.content
+    );
+    assert!(!namu_html.content.contains("<b>"), "{}", namu_html.content);
+    assert!(!namu_html.content.contains("<i>"), "{}", namu_html.content);
+
+    let back = convert_with_mode(
+        ConversionRequest {
+            source: Format::Html,
+            target: Format::NamuMark,
+            input: &namu_html.content,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    let round_trip = convert_with_mode(
+        ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Html,
+            input: &back.content,
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert_eq!(round_trip.content, namu_html.content);
+
+    let wiki_html = convert_with_mode(
+        ConversionRequest {
+            source: Format::Wikitext,
+            target: Format::Html,
+            input: "'''bold''' and ''italic''",
+            context: &context,
+        },
+        ConversionMode::Strict,
+    )
+    .unwrap();
+    assert_eq!(wiki_html.content, "<p><b>bold</b> and <i>italic</i></p>");
 }

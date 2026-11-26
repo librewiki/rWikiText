@@ -13,13 +13,13 @@ pub(crate) struct Extraction {
     pub ranges: Vec<std::ops::Range<usize>>,
 }
 
-fn valid_title(s: &str) -> bool {
+pub(crate) fn valid_title(s: &str) -> bool {
     !s.trim().is_empty()
         && !s
             .chars()
             .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>' | '?'))
 }
-fn valid_sort_key(s: &str) -> bool {
+pub(crate) fn valid_sort_key(s: &str) -> bool {
     !s.chars()
         .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>'))
 }

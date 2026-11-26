@@ -1,4 +1,4 @@
-use crate::{inline, ConversionError, Format, Inline};
+use crate::{inline, ConversionError, HtmlStyle, Inline, RenderTarget};
 use scraper::{ElementRef, Node};
 
 #[derive(Debug, Clone)]
@@ -159,70 +159,76 @@ fn same_container(a: char, b: char) -> bool {
     tag(a) == tag(b)
 }
 
-pub(crate) fn list_type(block: &Block) -> Option<bool> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListKind {
+    Unordered,
+    Ordered,
+}
+
+pub(crate) fn list_kind(block: &Block) -> Option<ListKind> {
     match block {
         Block::List(lines) => match lines.first()?.markers.chars().next()? {
-            '*' => Some(false),
-            '#' => Some(true),
+            '*' => Some(ListKind::Unordered),
+            '#' => Some(ListKind::Ordered),
             _ => None,
         },
         _ => None,
     }
 }
 
-pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
+pub(crate) fn render(block: &Block, target: RenderTarget, alternate: bool) -> String {
     match block {
-        Block::Rule => match format {
-            Format::Wikitext => "----",
-            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
-            Format::Gfm => "---",
-            Format::Html => "<hr>",
+        Block::Rule => match target {
+            RenderTarget::Wikitext => "----",
+            RenderTarget::Gfm => "---",
+            RenderTarget::Html(_) => "<hr>",
         }
         .into(),
-        Block::RuleWithText(text) => match format {
-            Format::Wikitext => format!("----{}", crate::render_inline(text, format)),
-            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
-            Format::Gfm => {
-                let rendered = crate::render_inline(text, format);
+        Block::RuleWithText(text) => match target {
+            RenderTarget::Wikitext => format!("----{}", crate::render_inline(text, target)),
+            RenderTarget::Gfm => {
+                let rendered = crate::render_inline(text, target);
                 let leading = rendered.bytes().take_while(|b| *b == b' ').count();
                 format!("---\n\n{}{}", "&#32;".repeat(leading), &rendered[leading..])
             }
-            Format::Html => format!("<hr><p>{}</p>", crate::render_inline(text, format)),
+            RenderTarget::Html(_) => format!("<hr><p>{}</p>", crate::render_inline(text, target)),
         },
-        Block::Pre(text) => match format {
-            Format::Wikitext => crate::escape_wikitext(text)
+        Block::Pre(text) => match target {
+            RenderTarget::Wikitext => crate::escape_wikitext(text)
                 .split('\n')
                 .map(|line| format!(" {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
-            Format::Html => format!("<pre>{}</pre>", html_escape::encode_text(text)),
-            Format::Gfm => format!("<pre>{}</pre>", html_escape::encode_text(text)),
-        },
-        Block::WikiPre(content) => match format {
-            Format::Wikitext => crate::render_inline(content, format)
-                .split('\n')
-                .map(|line| format!(" {line}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            Format::NamuMark => unreachable!("NamuMark uses its dedicated renderer"),
-            Format::Html | Format::Gfm => {
-                format!("<pre>{}</pre>", crate::render_inline(content, Format::Html))
+            RenderTarget::Html(_) | RenderTarget::Gfm => {
+                format!("<pre>{}</pre>", html_escape::encode_text(text))
             }
         },
-        Block::List(lines) if format == Format::Wikitext => lines
+        Block::WikiPre(content) => match target {
+            RenderTarget::Wikitext => crate::render_inline(content, target)
+                .split('\n')
+                .map(|line| format!(" {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            RenderTarget::Html(_) | RenderTarget::Gfm => {
+                format!(
+                    "<pre>{}</pre>",
+                    crate::render_inline(content, RenderTarget::Html(target.html_style()))
+                )
+            }
+        },
+        Block::List(lines) if target == RenderTarget::Wikitext => lines
             .iter()
             .map(|line| {
                 format!(
                     "{} {}",
                     line.markers,
-                    crate::render_inline(&line.content, format)
+                    crate::render_inline(&line.content, target)
                 )
             })
             .collect::<Vec<_>>()
             .join("\n"),
         Block::List(lines)
-            if format == Format::Gfm
+            if target == RenderTarget::Gfm
                 && lines.iter().all(|line| !line.markers.contains([';', ':'])) =>
         {
             lines
@@ -244,16 +250,16 @@ pub(crate) fn render(block: &Block, format: Format, alternate: bool) -> String {
                         "{}{} {}",
                         " ".repeat(indent),
                         marker,
-                        crate::render_inline(&line.content, format)
+                        crate::render_inline(&line.content, target)
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        Block::List(lines) => render_html_list(lines),
+        Block::List(lines) => render_html_list(lines, target.html_style()),
     }
 }
-fn render_html_list(lines: &[ListLine]) -> String {
+fn render_html_list(lines: &[ListLine], style: HtmlStyle) -> String {
     let mut output = String::new();
     let mut path: Vec<char> = Vec::new();
     for line in lines {
@@ -281,7 +287,10 @@ fn render_html_list(lines: &[ListLine]) -> String {
                 path.push(*marker);
             }
         }
-        output.push_str(&crate::render_inline(&line.content, Format::Html));
+        output.push_str(&crate::render_inline(
+            &line.content,
+            RenderTarget::Html(style),
+        ));
     }
     while let Some(old) = path.pop() {
         output.push_str(&format!("</{}></{}>", item_tag(old), tag(old)));

@@ -1,15 +1,7 @@
-use crate::{core, inline, Block, Format, Inline, PageMetadata};
-
-fn escape(text: &str) -> String {
-    let mut out = String::new();
-    for ch in text.chars() {
-        if ch.is_ascii_punctuation() {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
-}
+use crate::{
+    core, escape_ascii_punctuation as escape, html_policy, inline, Block, HtmlStyle, Inline,
+    PageMetadata, RenderTarget,
+};
 
 fn inline_text(parts: &[Inline]) -> (String, bool) {
     let mut out = String::new();
@@ -74,12 +66,7 @@ fn inline_text(parts: &[Inline]) -> (String, bool) {
                 } else {
                     decoded
                 };
-                let valid_external = target
-                    .get(..7)
-                    .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
-                    || target
-                        .get(..8)
-                        .is_some_and(|s| s.eq_ignore_ascii_case("https://"));
+                let valid_external = html_policy::has_http_scheme(&target);
                 if target.is_empty()
                     || target
                         .chars()
@@ -147,7 +134,11 @@ pub(crate) fn render_block(block: &Block) -> (String, bool) {
             (out.join("\n"), loss)
         }
         Block::Table(table) => (
-            escape(&table.render(Format::Html).unwrap_or_default()),
+            escape(
+                &table
+                    .render(RenderTarget::Html(HtmlStyle::Parsoid))
+                    .unwrap_or_default(),
+            ),
             true,
         ),
         Block::Html(html) => (escape(html), true),

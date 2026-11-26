@@ -16,10 +16,10 @@ fn namumark_combined_emphasis_closes_in_closer_order() {
     use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
-        ("'''''x''' y''", Format::Html, "<p><i><b>x</b> y</i></p>"),
+        ("'''''x''' y''", Format::Html, "<p><em><strong>x</strong> y</em></p>"),
         ("'''''x''' y''", Format::Wikitext, "'''''x''' y''"),
         ("'''''x''' y''", Format::Gfm, "***x** y*"),
-        ("'''''x'' y'''", Format::Html, "<p><b><i>x</i> y</b></p>"),
+        ("'''''x'' y'''", Format::Html, "<p><strong><em>x</em> y</strong></p>"),
         ("'''''x'' y'''", Format::Wikitext, "'''''x'' y'''"),
         ("'''''x'' y'''", Format::Gfm, "***x* y**"),
     ];
@@ -50,11 +50,11 @@ fn namumark_issue_examples_convert_without_diagnostics() {
     for (input, expected) in [
         (
             "'''''bold-italic''' italic''",
-            "<p><i><b>bold-italic</b> italic</i></p>",
+            "<p><em><strong>bold-italic</strong> italic</em></p>",
         ),
         (
             "'''''bold-italic'' bold'''",
-            "<p><b><i>bold-italic</i> bold</b></p>",
+            "<p><strong><em>bold-italic</em> bold</strong></p>",
         ),
     ] {
         let result = convert(ConversionRequest {
@@ -81,14 +81,14 @@ fn namumark_nests_emphasis_inside_single_markers() {
         (
             "'''x ''y'' z'''",
             Format::Html,
-            "<p><b>x <i>y</i> z</b></p>",
+            "<p><strong>x <em>y</em> z</strong></p>",
         ),
         ("'''x ''y'' z'''", Format::Wikitext, "'''x ''y'' z'''"),
         ("'''x ''y'' z'''", Format::Gfm, "**x *y* z**"),
         (
             "''x '''y''' z''",
             Format::Html,
-            "<p><i>x <b>y</b> z</i></p>",
+            "<p><em>x <strong>y</strong> z</em></p>",
         ),
         ("''x '''y''' z''", Format::Wikitext, "''x '''y''' z''"),
         ("''x '''y''' z''", Format::Gfm, "*x **y** z*"),
@@ -119,7 +119,7 @@ fn namumark_symmetric_combined_emphasis_is_italic_outside_bold() {
     use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
-        ("'''''x'''''", Format::Html, "<p><i><b>x</b></i></p>"),
+        ("'''''x'''''", Format::Html, "<p><em><strong>x</strong></em></p>"),
         ("'''''x'''''", Format::Wikitext, "'''''x'''''"),
         ("'''''x'''''", Format::Gfm, "***x***"),
     ];
@@ -147,25 +147,25 @@ fn namumark_symmetric_combined_emphasis_keeps_nested_short_markers() {
     let cases = [
         (
             "'''''bold-italic with '''strong''' inside'''''",
-            "<p><i><b>bold-italic with <b>strong</b> inside</b></i></p>",
+            "<p><em><strong>bold-italic with <strong>strong</strong> inside</strong></em></p>",
             "'''''bold&#45;italic with '''strong''' inside'''''",
             "***bold\\-italic with **strong** inside***",
         ),
         (
             "'''''bold-italic with ''italic'' inside'''''",
-            "<p><i><b>bold-italic with <i>italic</i> inside</b></i></p>",
+            "<p><em><strong>bold-italic with <em>italic</em> inside</strong></em></p>",
             "'''''bold&#45;italic with ''italic'' inside'''''",
             "***bold\\-italic with *italic* inside***",
         ),
         (
             "'''''a [[Orchard|''x'']] b'''''",
-            "<p><i><b>a <a rel=\"mw:WikiLink\" href=\"./Orchard\"><i>x</i></a> b</b></i></p>",
+            "<p><em><strong>a <a rel=\"mw:WikiLink\" href=\"./Orchard\"><em>x</em></a> b</strong></em></p>",
             "'''''a [[Orchard|''x'']] b'''''",
             "***a [*x*](<./Orchard>) b***",
         ),
         (
             "'''''a''b''c'''''",
-            "<p><i><b>a<i>b</i>c</b></i></p>",
+            "<p><em><strong>a<em>b</em>c</strong></em></p>",
             "'''''a''b''c'''''",
             "***a*b*c***",
         ),
@@ -204,13 +204,13 @@ fn namumark_combined_emphasis_falls_back_without_symmetric_closer() {
     let cases = [
         (
             "'''''x''' y'' and ''z''",
-            "<p><i><b>x</b> y</i> and <i>z</i></p>",
+            "<p><em><strong>x</strong> y</em> and <em>z</em></p>",
             "'''''x''' y'' and ''z''",
             "***x** y* and *z*",
         ),
         (
             "'''''x'' y''' and '''z'''",
-            "<p><b><i>x</i> y</b> and <b>z</b></p>",
+            "<p><strong><em>x</em> y</strong> and <strong>z</strong></p>",
             "'''''x'' y''' and '''z'''",
             "***x* y** and **z**",
         ),
@@ -277,7 +277,7 @@ fn namumark_unclosed_combined_emphasis_keeps_utf8_and_crlf_offsets() {
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss);
     assert_eq!(result.diagnostics[0].span, 17..28);
-    assert_eq!(result.content, "<p>가<b>배</b>다<br>'''''a''' b</p>");
+    assert_eq!(result.content, "<p>가<strong>배</strong>다<br>'''''a''' b</p>");
     assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
 }
 
@@ -292,7 +292,7 @@ fn namumark_escaped_apostrophes_stay_literal() {
 fn namumark_escaped_apostrophe_inside_emphasis_body() {
     use rwikitext::{convert_with_mode, ConversionMode};
     let result = namumark_convert(Format::Html, r"''x \'' y''");
-    assert_eq!(result.content, "<p><i>x '' y</i></p>");
+    assert_eq!(result.content, "<p><em>x '' y</em></p>");
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let context = WikiContext::default();
     let request = ConversionRequest {
@@ -351,7 +351,7 @@ fn namumark_bracketed_prose_keeps_inner_emphasis_active() {
     use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
-        ("[note ''x'']", Format::Html, "<p>[note <i>x</i>]</p>"),
+        ("[note ''x'']", Format::Html, "<p>[note <em>x</em>]</p>"),
         ("[note ''x'']", Format::Wikitext, "&#91;note ''x''&#93;"),
         ("[note ''x'']", Format::Gfm, "\\[note *x*\\]"),
     ];
@@ -386,25 +386,25 @@ fn namumark_italic_closer_takes_leading_two_of_five_apostrophes() {
     let cases = [
         (
             "''a'''''b'''",
-            "<p><i>a</i><b>b</b></p>",
+            "<p><em>a</em><strong>b</strong></p>",
             "''a'''''b'''",
             "*a***b**",
         ),
         (
             "''a'''''b'''''c''",
-            "<p><i>a</i><b>b</b><i>c</i></p>",
+            "<p><em>a</em><strong>b</strong><em>c</em></p>",
             "''a'''''b'''''c''",
             "*a***b***c*",
         ),
         (
             "See ''italic'''''bold''' here.",
-            "<p>See <i>italic</i><b>bold</b> here.</p>",
+            "<p>See <em>italic</em><strong>bold</strong> here.</p>",
             "See ''italic'''''bold''' here.",
             "See *italic***bold** here\\.",
         ),
         (
             "[[Orchard|''a'''''b''']]",
-            "<p><a rel=\"mw:WikiLink\" href=\"./Orchard\"><i>a</i><b>b</b></a></p>",
+            "<p><a rel=\"mw:WikiLink\" href=\"./Orchard\"><em>a</em><strong>b</strong></a></p>",
             "[[Orchard|''a'''''b''']]",
             "[*a***b**](<./Orchard>)",
         ),
@@ -445,25 +445,25 @@ fn namumark_shared_five_run_closes_italic_and_bold_pair() {
     let cases = [
         (
             "plain''italic'''bold-italic'''''plain",
-            "<p>plain<i>italic<b>bold-italic</b></i>plain</p>",
+            "<p>plain<em>italic<strong>bold-italic</strong></em>plain</p>",
             "plain''italic'''bold&#45;italic'''''plain",
             "plain*italic**bold\\-italic***plain",
         ),
         (
             "plain'''bold''bold-italic'''''plain",
-            "<p>plain<b>bold<i>bold-italic</i></b>plain</p>",
+            "<p>plain<strong>bold<em>bold-italic</em></strong>plain</p>",
             "plain'''bold''bold&#45;italic'''''plain",
             "plain**bold*bold\\-italic***plain",
         ),
         (
             "''a'''b'''''",
-            "<p><i>a<b>b</b></i></p>",
+            "<p><em>a<strong>b</strong></em></p>",
             "''a'''b'''''",
             "*a**b***",
         ),
         (
             "'''a''b'''''",
-            "<p><b>a<i>b</i></b></p>",
+            "<p><strong>a<em>b</em></strong></p>",
             "'''a''b'''''",
             "**a*b***",
         ),
@@ -503,7 +503,7 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
     // Three- and four-apostrophe runs never close italic.
     for (input, html, wikitext, gfm) in [(
         "''x '''y''' z''",
-        "<p><i>x <b>y</b> z</i></p>",
+        "<p><em>x <strong>y</strong> z</em></p>",
         "''x '''y''' z''",
         "*x **y** z*",
     )] {
@@ -542,7 +542,7 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
         context: &context,
     };
     let result = convert(request).unwrap();
-    assert_eq!(result.content, "<p><i>a</i>''''</p>", "input {input}");
+    assert_eq!(result.content, "<p><em>a</em>''''</p>", "input {input}");
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert_eq!(
         result.diagnostics[0].kind,
@@ -562,7 +562,7 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
         context: &context,
     };
     let result = convert(request).unwrap();
-    assert_eq!(result.content, "<p><i>x''''y</i></p>", "input {input}");
+    assert_eq!(result.content, "<p><em>x''''y</em></p>", "input {input}");
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert_eq!(
         result.diagnostics[0].kind,

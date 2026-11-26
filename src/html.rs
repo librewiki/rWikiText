@@ -3,9 +3,10 @@ use std::ops::Range;
 use scraper::{ElementRef, Html, Node};
 
 use crate::{
-    core, escape_wikitext, heading_id, html_policy, inline, locate, original_range, render_inline,
-    table, transclusion, wiki_links, wiki_markup, Block, ConversionError, Diagnostic, Document,
-    Format, Inline, WikiData,
+    core, escape_wikitext, heading_id,
+    html_policy::{self, HtmlPolicy},
+    inline, locate, original_range, render_inline, table, transclusion, wiki_links, wiki_markup,
+    Block, ConversionError, Diagnostic, Document, HtmlStyle, Inline, RenderTarget, WikiData,
 };
 
 enum MarkdownSource {
@@ -112,7 +113,7 @@ pub(crate) fn parse_gfm(
     input: &str,
     wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
-    namumark: bool,
+    policy: HtmlPolicy,
 ) -> Result<Document, ConversionError> {
     let mut options = comrak::Options::default();
     options.extension.autolink = true;
@@ -129,14 +130,14 @@ pub(crate) fn parse_gfm(
     let html = String::from_utf8(output)
         .map_err(|_| ConversionError::new("GFM renderer produced invalid UTF-8"))?;
     let locations = markdown_locations(root, input);
-    let sanitized = if namumark { html_policy::sanitize_namumark(&html) } else { html_policy::sanitize(&html, false) };
+    let sanitized = html_policy::sanitize(&html, policy);
     diagnostics.extend(markdown_diagnostics(
         &html,
         input,
         &locations,
         sanitized.diagnostics,
     ));
-    parse_html_document(&sanitized.text, input, wiki_data, diagnostics, namumark)
+    parse_html_document(&sanitized.text, input, wiki_data, diagnostics, policy)
 }
 
 fn normalized_html_text(text: &str) -> String {
@@ -156,13 +157,13 @@ fn normalized_html_text(text: &str) -> String {
     output
 }
 
-fn push_html_inline(element: ElementRef<'_>, content: &mut Vec<Inline>, namumark: bool) {
+fn push_html_inline(element: ElementRef<'_>, content: &mut Vec<Inline>, policy: HtmlPolicy) {
     match element.value().name() {
         "a" if element.value().attrs().all(|(name, _)| name == "href") => {
-            content.extend(html_link(element, namumark));
+            content.extend(html_link(element, policy));
         }
         "b" | "strong" | "i" | "em" if element.value().attrs().next().is_none() => {
-            let children = html_inlines(element, false, namumark);
+            let children = html_inlines(element, false, policy);
             content.push(Inline::Emphasis {
                 strong: matches!(element.value().name(), "b" | "strong"),
                 children,
@@ -172,9 +173,20 @@ fn push_html_inline(element: ElementRef<'_>, content: &mut Vec<Inline>, namumark
     }
 }
 
-fn html_link(element: ElementRef<'_>, namumark: bool) -> Vec<Inline> {
-    let label = html_inlines(element, false, namumark);
-    if namumark { if let Some(href) = element.attr("href").filter(|h| crate::namumark::internal_transport(h)) { return vec![Inline::Link { href: href.to_owned(), label, internal: true }]; } }
+fn html_link(element: ElementRef<'_>, policy: HtmlPolicy) -> Vec<Inline> {
+    let label = html_inlines(element, false, policy);
+    if policy.is_namumark_import() {
+        if let Some(href) = element
+            .attr("href")
+            .filter(|h| crate::namumark::internal_transport(h))
+        {
+            return vec![Inline::Link {
+                href: href.to_owned(),
+                label,
+                internal: true,
+            }];
+        }
+    }
     if let Some((href, internal)) = element
         .attr("href")
         .and_then(|href| inline::link_target(href).ok())
@@ -189,7 +201,7 @@ fn html_link(element: ElementRef<'_>, namumark: bool) -> Vec<Inline> {
     }
 }
 
-fn html_inlines(parent: ElementRef<'_>, trim: bool, namumark: bool) -> Vec<Inline> {
+fn html_inlines(parent: ElementRef<'_>, trim: bool, policy: HtmlPolicy) -> Vec<Inline> {
     let mut content = Vec::new();
     for child in parent.children() {
         match child.value() {
@@ -207,9 +219,15 @@ fn html_inlines(parent: ElementRef<'_>, trim: bool, namumark: bool) -> Vec<Inlin
                 if matches!(parent.value().name(), "li" | "dt" | "dd")
                     && matches!(element.name(), "ol" | "ul" | "dl") => {}
             Node::Element(element) if element.name() == "p" && parent.value().name() == "li" => {
-                content.extend(html_inlines(ElementRef::wrap(child).unwrap(), trim, namumark));
+                content.extend(html_inlines(
+                    ElementRef::wrap(child).unwrap(),
+                    trim,
+                    policy,
+                ));
             }
-            Node::Element(_) => push_html_inline(ElementRef::wrap(child).unwrap(), &mut content, namumark),
+            Node::Element(_) => {
+                push_html_inline(ElementRef::wrap(child).unwrap(), &mut content, policy)
+            }
             _ => {}
         }
     }
@@ -225,7 +243,11 @@ fn html_inlines(parent: ElementRef<'_>, trim: bool, namumark: bool) -> Vec<Inlin
 }
 
 pub(crate) fn parse_html_inlines(parent: ElementRef<'_>) -> Result<Vec<Inline>, ConversionError> {
-    Ok(html_inlines(parent, parent.value().name() != "pre", false))
+    Ok(html_inlines(
+        parent,
+        parent.value().name() != "pre",
+        HtmlPolicy::MediaWikiImport,
+    ))
 }
 
 pub(crate) fn parse_html(
@@ -235,10 +257,10 @@ pub(crate) fn parse_html(
     markup: &mut wiki_markup::Markup,
     wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
-    namumark: bool,
+    policy: HtmlPolicy,
 ) -> Result<Document, ConversionError> {
     let (edits, metadata_diagnostics) = transclusion::recover(input);
-    let sanitized = if namumark { html_policy::sanitize_namumark(input) } else { html_policy::sanitize(input, false) };
+    let sanitized = html_policy::sanitize(input, policy);
     diagnostics.extend(
         metadata_diagnostics
             .into_iter()
@@ -249,8 +271,11 @@ pub(crate) fn parse_html(
             }),
     );
     for edit in edits {
-        if namumark {
-            diagnostics.push(Diagnostic::loss(original_range(edit.span, extracted), "NamuMark cannot preserve MediaWiki transclusion identity"));
+        if policy.is_namumark_import() {
+            diagnostics.push(Diagnostic::loss(
+                original_range(edit.span, extracted),
+                "NamuMark cannot preserve MediaWiki transclusion identity",
+            ));
             continue;
         }
         markup.replace(
@@ -265,7 +290,7 @@ pub(crate) fn parse_html(
         original,
         wiki_data,
         diagnostics,
-        namumark,
+        policy,
     )
 }
 
@@ -274,7 +299,7 @@ fn parse_html_document(
     original: &str,
     wiki_data: Option<&dyn WikiData>,
     diagnostics: &mut Vec<Diagnostic>,
-    namumark: bool,
+    policy: HtmlPolicy,
 ) -> Result<Document, ConversionError> {
     let dom = Html::parse_fragment(sanitized);
     let check_url = |resource: &str, url: &str, diagnostics: &mut Vec<Diagnostic>| {
@@ -339,7 +364,7 @@ fn parse_html_document(
         diagnostics,
         &mut ids,
         &mut blocks,
-        namumark,
+        policy,
     )?;
     Ok(Document { blocks })
 }
@@ -350,7 +375,7 @@ fn html_blocks(
     diagnostics: &mut Vec<Diagnostic>,
     ids: &mut std::collections::HashSet<String>,
     blocks: &mut Vec<Block>,
-    namumark: bool,
+    policy: HtmlPolicy,
 ) -> Result<(), ConversionError> {
     let mut paragraph = Vec::new();
     for child in parent.children() {
@@ -363,7 +388,7 @@ fn html_blocks(
                 paragraph.clear();
                 let block = match name {
                     "section" if element.value().attrs().next().is_none() => {
-                        html_blocks(element, original, diagnostics, ids, blocks, namumark)?;
+                        html_blocks(element, original, diagnostics, ids, blocks, policy)?;
                         continue;
                     }
                     "p" if element.value().attrs().next().is_none()
@@ -372,10 +397,10 @@ fn html_blocks(
                                 .descendent_elements()
                                 .any(|child| child.attr("data-rwikitext-token").is_some())) =>
                     {
-                        Block::Paragraph(html_inlines(element, true, namumark))
+                        Block::Paragraph(html_inlines(element, true, policy))
                     }
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                        let text = html_inlines(element, true, namumark);
+                        let text = html_inlines(element, true, policy);
                         let canonical = heading_id(&text, ids);
                         if element
                             .value()
@@ -420,7 +445,9 @@ fn html_blocks(
                                 }
                             }
                         }
-                        match core::parse_html(element, &|el| Ok(html_inlines(el, el.value().name() != "pre", namumark))) {
+                        match core::parse_html(element, &|el| {
+                            Ok(html_inlines(el, el.value().name() != "pre", policy))
+                        }) {
                             Ok(Some(block)) => Block::Core(block),
                             _ => Block::Html(element.html()),
                         }
@@ -429,7 +456,7 @@ fn html_blocks(
                 };
                 blocks.push(block);
             } else {
-                push_html_inline(element, &mut paragraph, namumark);
+                push_html_inline(element, &mut paragraph, policy);
             }
         } else if let Node::Text(text) = child.value() {
             inline::text(&mut paragraph, &normalized_html_text(text));
@@ -533,7 +560,10 @@ pub(crate) fn html_to_wiki(source: &str) -> String {
             if !attributes.is_empty() {
                 output.push_str(&format!("<span{attributes}>"));
             }
-            output.push_str(&render_inline(&html_link(element, false), Format::Wikitext));
+            output.push_str(&render_inline(
+                &html_link(element, HtmlPolicy::MediaWikiImport),
+                RenderTarget::Wikitext,
+            ));
             if !attributes.is_empty() {
                 output.push_str("</span>");
             }
@@ -586,7 +616,7 @@ pub(crate) fn embedded_html(source: &str, language: &str) -> String {
         if preformatted {
             html.push_str(text);
         } else if let Ok(parts) = inline::parse_wiki(text, language) {
-            html.push_str(&render_inline(&parts, Format::Html));
+            html.push_str(&render_inline(&parts, RenderTarget::Html(HtmlStyle::Parsoid)));
         } else {
             html.push_str(text);
         }
