@@ -381,6 +381,19 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
+                if !external
+                    && title
+                        .split_once('#')
+                        .is_some_and(|(_, fragment)| is_automatic_section_anchor(fragment))
+                {
+                    diagnostics.push(Diagnostic::loss(
+                        base + i..base + i + end + 4,
+                        "unsupported NamuMark automatic section anchor",
+                    ));
+                    inline::text(&mut out, &rest[..end + 4]);
+                    i += end + 4;
+                    continue;
+                }
                 if target == Format::Wikitext
                     && !external
                     && title
@@ -413,13 +426,15 @@ fn inlines(
                         ));
                         title.to_owned()
                     } else {
-                        format!(
-                            "{}/{child}",
-                            context
-                                .page_title
-                                .rsplit_once('/')
-                                .map_or(context.page_title, |(p, _)| p)
-                        )
+                        let parent = context
+                            .page_title
+                            .rsplit_once('/')
+                            .map_or(context.page_title, |(p, _)| p);
+                        if child.is_empty() {
+                            parent.to_owned()
+                        } else {
+                            format!("{parent}/{child}")
+                        }
                     }
                 } else {
                     title.to_owned()
@@ -595,6 +610,15 @@ fn unescape(input: &str) -> String {
         }
     }
     out
+}
+
+/// Automatic NamuMark section anchors look like `s-1`, `s-2`, or dotted forms
+/// such as `s-1.3`; each dot-separated part must be non-empty ASCII digits.
+fn is_automatic_section_anchor(fragment: &str) -> bool {
+    fragment.strip_prefix("s-").is_some_and(|rest| {
+        rest.split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 pub(crate) fn internal_transport(href: &str) -> bool {

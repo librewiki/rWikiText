@@ -149,3 +149,100 @@ fn mediawiki_metadata_never_activates_namumark_title_markup() {
     assert!(!result.content.contains("{{bad}}"));
     assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
 }
+
+#[test]
+fn namumark_parent_relative_link_resolves_without_trailing_slash() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext { page_title: "Parent/Child", ..WikiContext::default() };
+    let cases = [
+        (Format::Html, "<p><a rel=\"mw:WikiLink\" href=\"./Parent\">../</a></p>"),
+        (Format::Wikitext, "[[Parent|../]]"),
+        (Format::Gfm, "[\\.\\.\\/](<./Parent>)"),
+    ];
+    for (target, expected) in cases {
+        let request = ConversionRequest { source: Format::NamuMark, target, input: "[[../]]", context: &context };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "target {target:?}");
+        assert!(result.diagnostics.is_empty(), "target {target:?}");
+        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "target {target:?}");
+    }
+}
+
+#[test]
+fn namumark_parent_relative_link_with_sibling_segment_resolves() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext { page_title: "Parent/Child", ..WikiContext::default() };
+    let cases = [
+        (Format::Html, "<p><a rel=\"mw:WikiLink\" href=\"./Parent/Sibling\">../Sibling</a></p>"),
+        (Format::Wikitext, "[[Parent/Sibling|../Sibling]]"),
+        (Format::Gfm, "[\\.\\.\\/Sibling](<./Parent/Sibling>)"),
+    ];
+    for (target, expected) in cases {
+        let request = ConversionRequest { source: Format::NamuMark, target, input: "[[../Sibling]]", context: &context };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "target {target:?}");
+        assert!(result.diagnostics.is_empty(), "target {target:?}");
+        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "target {target:?}");
+    }
+}
+
+#[test]
+fn namumark_parent_relative_link_on_top_level_title_stays_current() {
+    let context = WikiContext { page_title: "Parent", ..WikiContext::default() };
+    let result = convert(ConversionRequest { source: Format::NamuMark, target: Format::Html, input: "[[../]]", context: &context }).unwrap();
+    assert_eq!(result.content, "<p><a rel=\"mw:WikiLink\" href=\"./Parent\">../</a></p>");
+    assert!(result.diagnostics.is_empty());
+}
+
+#[test]
+fn namumark_automatic_section_anchors_are_excluded_with_loss() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    for input in ["[[#s-2]]", "[[Orchard#s-1]]"] {
+        let request = ConversionRequest { source: Format::NamuMark, target: Format::Html, input, context: &context };
+        let result = convert(request).unwrap();
+        assert_eq!(result.diagnostics.len(), 1, "input {input}");
+        assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss, "input {input}");
+        assert_eq!(result.diagnostics[0].span, 0..input.len(), "input {input}");
+        assert!(!result.content.contains("<a "), "input {input}");
+        assert!(result.content.contains(input), "input {input}");
+        assert!(convert_with_mode(request, ConversionMode::Strict).is_err(), "input {input}");
+    }
+}
+
+#[test]
+fn namumark_subnumbered_section_anchor_is_excluded() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    let input = "[[Orchard#s-1.3|visit]]";
+    let request = ConversionRequest { source: Format::NamuMark, target: Format::Html, input, context: &context };
+    let result = convert(request).unwrap();
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(result.diagnostics[0].span, 0..input.len());
+    assert!(!result.content.contains("<a "));
+    assert!(result.content.contains(input));
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+}
+
+#[test]
+fn namumark_explicit_non_automatic_fragments_remain_active() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext::default();
+    let cases = [
+        ("[[Orchard#s-note|note]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-note\">note</a></p>"),
+        ("[[Orchard#s-1x]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-1x\">Orchard#s-1x</a></p>"),
+        ("[[Orchard#s-1.]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-1.\">Orchard#s-1.</a></p>"),
+        ("[[Orchard#s-]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-\">Orchard#s-</a></p>"),
+    ];
+    for (input, expected) in cases {
+        let request = ConversionRequest { source: Format::NamuMark, target: Format::Html, input, context: &context };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "input {input}");
+        assert!(
+            result.diagnostics.iter().all(|d| d.kind != DiagnosticKind::ConversionLoss),
+            "input {input}: {:?}", result.diagnostics
+        );
+        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "input {input}");
+    }
+}
