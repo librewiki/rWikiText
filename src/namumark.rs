@@ -381,6 +381,27 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
+                // A link target is "page#fragment"; only the page part is relative. Split the
+                // fragment once so '#' is never treated as a path separator.
+                let (title_page, title_fragment) = title
+                    .split_once('#')
+                    .map_or((title, None), |(page, fragment)| (page, Some(fragment)));
+                // '\#' is a literal title character, not a fragment separator
+                // (docs/namumark.md: never reinterpret escaped syntax), so the separator is
+                // located on the raw title and only an unescaped fragment can be automatic.
+                if !external
+                    && find_unescaped(raw_title, "#").is_some_and(|hash| {
+                        is_automatic_section_anchor(&unescape(&raw_title[hash + 1..]))
+                    })
+                {
+                    diagnostics.push(Diagnostic::loss(
+                        base + i..base + i + end + 4,
+                        "unsupported NamuMark automatic section anchor",
+                    ));
+                    inline::text(&mut out, &rest[..end + 4]);
+                    i += end + 4;
+                    continue;
+                }
                 if target == Format::Wikitext
                     && !external
                     && title
@@ -395,34 +416,42 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
-                let resolved = if let Some(child) = title.strip_prefix('/') {
+                let resolved_page = if let Some(child) = title_page.strip_prefix('/') {
                     if context.page_title.is_empty() {
                         diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
                             "relative link requires page title",
                         ));
-                        title.to_owned()
+                        title_page.to_owned()
+                    } else if child.is_empty() {
+                        context.page_title.to_owned()
                     } else {
                         format!("{}/{child}", context.page_title)
                     }
-                } else if let Some(child) = title.strip_prefix("../") {
+                } else if let Some(child) = title_page.strip_prefix("../") {
                     if context.page_title.is_empty() {
                         diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
                             "relative link requires page title",
                         ));
-                        title.to_owned()
+                        title_page.to_owned()
                     } else {
-                        format!(
-                            "{}/{child}",
-                            context
-                                .page_title
-                                .rsplit_once('/')
-                                .map_or(context.page_title, |(p, _)| p)
-                        )
+                        let parent = context
+                            .page_title
+                            .rsplit_once('/')
+                            .map_or(context.page_title, |(p, _)| p);
+                        if child.is_empty() {
+                            parent.to_owned()
+                        } else {
+                            format!("{parent}/{child}")
+                        }
                     }
                 } else {
-                    title.to_owned()
+                    title_page.to_owned()
+                };
+                let resolved = match title_fragment {
+                    Some(fragment) => format!("{resolved_page}#{fragment}"),
+                    None => resolved_page,
                 };
                 let resolved = if target == Format::Wikitext {
                     resolved
@@ -595,6 +624,15 @@ fn unescape(input: &str) -> String {
         }
     }
     out
+}
+
+/// Automatic NamuMark section anchors look like `s-1`, `s-2`, or dotted forms
+/// such as `s-1.3`; each dot-separated part must be non-empty ASCII digits.
+fn is_automatic_section_anchor(fragment: &str) -> bool {
+    fragment.strip_prefix("s-").is_some_and(|rest| {
+        rest.split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 pub(crate) fn internal_transport(href: &str) -> bool {
