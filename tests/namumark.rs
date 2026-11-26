@@ -706,7 +706,7 @@ fn namumark_html_emphasis_uses_semantic_tags_while_wikitext_preserves_parsoid_ta
         namu_html.content
     );
     assert!(
-        namu_html.content.contains("<strong><em>both</em></strong>"),
+        namu_html.content.contains("<em><strong>both</strong></em>"),
         "{}",
         namu_html.content
     );

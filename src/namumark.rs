@@ -287,6 +287,7 @@ fn is_excluded_namumark_list(line: &str) -> bool {
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     digits > 0 && &rest[..digits] != "1" && rest[digits..].starts_with(". ")
 }
+
 impl InlineParser<'_, '_> {
     fn parse(&mut self, input: &str, base: usize, depth: usize) -> Vec<Inline> {
         if depth > 32 {
@@ -305,7 +306,10 @@ impl InlineParser<'_, '_> {
                 i += 1 + escaped.len_utf8();
                 continue;
             }
-            if rest.starts_with("[br]") {
+            if rest
+                .get(..4)
+                .is_some_and(|piece| piece.eq_ignore_ascii_case("[br]"))
+            {
                 out.push(Inline::Html("<br>".into()));
                 i += 4;
                 continue;
@@ -544,47 +548,22 @@ impl InlineParser<'_, '_> {
                 inline::text(&mut out, rest);
                 break;
             }
-            if let Some(body) = rest.strip_prefix("'''''") {
-                if let Some(end) = find_unescaped(body, "'''''") {
-                    let children = self.parse(&body[..end], base + i + 5, depth + 1);
-                    out.push(Inline::Emphasis {
-                        strong: true,
-                        children: vec![Inline::Emphasis {
-                            strong: false,
-                            children,
-                        }],
-                    });
-                    i += 10 + end;
-                    continue;
+            if apostrophe_run(rest) >= 2 {
+                match self.emphasis(rest, base + i, depth) {
+                    Ok((nodes, consumed)) => {
+                        out.extend(nodes);
+                        i += consumed;
+                    }
+                    Err(()) => {
+                        self.diagnostics.push(Diagnostic::loss(
+                            base + i..base + input.len(),
+                            "unclosed NamuMark emphasis",
+                        ));
+                        inline::text(&mut out, rest);
+                        break;
+                    }
                 }
-            }
-            let marker = if rest.starts_with("'''") {
-                Some(("'''", true))
-            } else if rest.starts_with("''") {
-                Some(("''", false))
-            } else {
-                None
-            };
-            if let Some((delimiter, strong)) = marker {
-                if let Some(end) = find_unescaped(&rest[delimiter.len()..], delimiter) {
-                    let end = delimiter.len() + end;
-                    out.push(Inline::Emphasis {
-                        strong,
-                        children: self.parse(
-                            &rest[delimiter.len()..end],
-                            base + i + delimiter.len(),
-                            depth + 1,
-                        ),
-                    });
-                    i += end + delimiter.len();
-                    continue;
-                }
-                self.diagnostics.push(Diagnostic::loss(
-                    base + i..base + input.len(),
-                    "unclosed NamuMark emphasis",
-                ));
-                inline::text(&mut out, rest);
-                break;
+                continue;
             }
             let excluded = ["__", "~~", "--", "^^", ",,"]
                 .into_iter()
@@ -599,21 +578,173 @@ impl InlineParser<'_, '_> {
                 i += end;
                 continue;
             }
-            if rest.starts_with('[') && !rest.starts_with("[[") && rest.find(']').is_some() {
-                let end = rest.find(']').map_or(rest.len(), |n| n + 1);
-                self.diagnostics.push(Diagnostic::loss(
-                    base + i..base + i + end,
-                    "unsupported NamuMark macro or footnote",
-                ));
-                inline::text(&mut out, &rest[..end]);
-                i += end;
-                continue;
+            if rest.starts_with('[') && !rest.starts_with("[[") {
+                if let Some(offset) = find_unescaped(&rest[1..], "]") {
+                    let inner = &rest[1..1 + offset];
+                    if is_namumark_footnote(inner) || is_namumark_macro(inner) {
+                        let end = offset + 2;
+                        self.diagnostics.push(Diagnostic::loss(
+                            base + i..base + i + end,
+                            "unsupported NamuMark macro or footnote",
+                        ));
+                        inline::text(&mut out, &rest[..end]);
+                        i += end;
+                        continue;
+                    }
+                }
+                // Ordinary bracketed text falls through and emits only '[' via the
+                // default path, so prose like [1] or [sic] is never diagnosed.
             }
             let c = rest.chars().next().unwrap();
             inline::text(&mut out, &c.to_string());
             i += c.len_utf8();
         }
         out
+    }
+
+    /// Parse an emphasis construct whose input starts at an apostrophe run.
+    ///
+    /// Two apostrophes are italic, three or four are bold (a fourth opener or
+    /// closer apostrophe stays literal), and five or more combine both. A combined
+    /// opener prefers the first run of five or more apostrophes as the symmetric
+    /// closer, so nested short markers stay inside the body, and only falls back
+    /// to the earliest short run (two, three, or four apostrophes) when no 5+ run
+    /// exists. Symmetric closers nest bold inside italic; a two-apostrophe closer
+    /// closes italic first, so bold wraps the remainder, and a three- or
+    /// four-apostrophe closer closes bold first, so italic wraps the remainder.
+    /// Every closer is located before any recursive parsing so a failure never
+    /// emits nested diagnostics; on failure the whole construct is left to the
+    /// caller's literal fallback.
+    fn emphasis(&mut self, input: &str, base: usize, depth: usize) -> Result<(Vec<Inline>, usize), ()> {
+        let opener = apostrophe_run(input);
+        let mut nodes = Vec::new();
+        let consumed;
+        if opener == 2 {
+            let (closer_offset, closer_run) = find_italic_closer(&input[2..]).ok_or(())?;
+            let body_end = 2 + closer_offset;
+            let body = &input[2..body_end];
+            // A five-or-more run can donate its leading two apostrophes to close
+            // this italic; if the body holds exactly one unmatched bold opener, a
+            // virtual `'''` closes it and the rest of the run opens the next
+            // construct.
+            let append =
+                if closer_run >= 5 && simple_emphasis_body(body) && odd_emphasis_runs(body, 3) {
+                    "'''"
+                } else {
+                    ""
+                };
+            let body_input;
+            let body = if append.is_empty() {
+                body
+            } else {
+                body_input = format!("{body}{append}");
+                &body_input
+            };
+            let children = self.parse(body, base + 2, depth + 1);
+            nodes.push(Inline::Emphasis {
+                strong: false,
+                children,
+            });
+            // Consume the closer's leading two apostrophes; when a five-or-more
+            // run is shared, `append.len()` apostrophes of that run also close the
+            // inner bold, and any remainder is re-lexed by the caller.
+            consumed = body_end + append.len() + 2;
+        } else if opener == 3 || opener == 4 {
+            let (closer_offset, closer_run) = find_run_at_least(&input[3..], 3).ok_or(())?;
+            let body_end = 3 + closer_offset;
+            let body = &input[3..body_end];
+            // A five-or-more run can donate its leading three apostrophes to close
+            // this bold; if the body holds exactly one unmatched italic opener, a
+            // virtual `''` closes it and the rest of the run opens the next
+            // construct.
+            let append =
+                if closer_run >= 5 && simple_emphasis_body(body) && odd_emphasis_runs(body, 2) {
+                    "''"
+                } else {
+                    ""
+                };
+            let body_input;
+            let body = if append.is_empty() {
+                body
+            } else {
+                body_input = format!("{body}{append}");
+                &body_input
+            };
+            let children = self.parse(body, base + 3, depth + 1);
+            nodes.push(Inline::Emphasis {
+                strong: true,
+                children,
+            });
+            // Consume three apostrophes; when a five-or-more run is shared,
+            // `append.len()` apostrophes also close the inner italic, and any
+            // remainder is re-lexed by the caller.
+            consumed = body_end + append.len() + 3;
+        } else {
+            // Five or more apostrophes combine italic and bold. Prefer the first
+            // run of five or more apostrophes as the symmetric closer so nested
+            // short markers (`''`, `'''`) stay in the body, and fall back to the
+            // earliest short run only when no 5+ run exists.
+            let body_start = opener;
+            let (closer_offset, closer_run) = find_run_at_least(&input[body_start..], 5)
+                .or_else(|| find_run_at_least(&input[body_start..], 2))
+                .ok_or(())?;
+            let body_end = body_start + closer_offset;
+            let node;
+            if closer_run >= 5 {
+                // Symmetric combined form: italic outside bold.
+                let children = self.parse(&input[body_start..body_end], base + body_start, depth + 2);
+                node = Inline::Emphasis {
+                    strong: false,
+                    children: vec![Inline::Emphasis {
+                        strong: true,
+                        children,
+                    }],
+                };
+                // Extra closer-run apostrophes are re-lexed by the caller.
+                consumed = body_start + closer_offset + 5;
+            } else if closer_run == 2 {
+                // Italic closes first, so bold wraps the remainder.
+                let tail_start = body_end + 2;
+                let (tail_offset, _) = find_run_at_least(&input[tail_start..], 3).ok_or(())?;
+                let tail_end = tail_start + tail_offset;
+                let inner = self.parse(&input[body_start..body_end], base + body_start, depth + 2);
+                let tail = self.parse(&input[tail_start..tail_end], base + tail_start, depth + 1);
+                let mut children = vec![Inline::Emphasis {
+                    strong: false,
+                    children: inner,
+                }];
+                children.extend(tail);
+                node = Inline::Emphasis {
+                    strong: true,
+                    children,
+                };
+                consumed = tail_end + 3;
+            } else {
+                // Bold closes first (three or four apostrophes), so italic wraps
+                // the remainder.
+                let tail_start = body_end + 3;
+                let tail_offset = find_exact_run(&input[tail_start..], 2).ok_or(())?;
+                let tail_end = tail_start + tail_offset;
+                let inner = self.parse(&input[body_start..body_end], base + body_start, depth + 2);
+                let tail = self.parse(&input[tail_start..tail_end], base + tail_start, depth + 1);
+                let mut children = vec![Inline::Emphasis {
+                    strong: true,
+                    children: inner,
+                }];
+                children.extend(tail);
+                node = Inline::Emphasis {
+                    strong: false,
+                    children,
+                };
+                consumed = tail_end + 2;
+            };
+            // Any opener apostrophes beyond the combined marker stay literal.
+            if opener > 5 {
+                nodes.push(Inline::Text("'".repeat(opener - 5)));
+            }
+            nodes.push(node);
+        }
+        Ok((nodes, consumed))
     }
 }
 
@@ -635,6 +766,140 @@ fn find_unescaped(input: &str, needle: &str) -> Option<usize> {
     }
     None
 }
+
+/// Number of leading apostrophes in `input`.
+fn apostrophe_run(input: &str) -> usize {
+    input.bytes().take_while(|&byte| byte == b'\'').count()
+}
+
+/// Locate the first unescaped run of exactly `n` apostrophes. Runs of any
+/// other length are skipped whole so a longer run never closes a shorter one.
+fn find_exact_run(input: &str, n: usize) -> Option<usize> {
+    find_apostrophe_run(input, |run| run == n).map(|(offset, _)| offset)
+}
+
+/// Locate the first unescaped run of at least `n` apostrophes, returning the
+/// offset and the full run length.
+fn find_run_at_least(input: &str, n: usize) -> Option<(usize, usize)> {
+    find_apostrophe_run(input, |run| run >= n)
+}
+
+/// Locate the first unescaped run that can close italic: exactly two
+/// apostrophes, or the leading two of a five-or-more run (the remainder can
+/// still open bold).
+fn find_italic_closer(input: &str) -> Option<(usize, usize)> {
+    find_apostrophe_run(input, |run| run == 2 || run >= 5)
+}
+
+/// Locate the first unescaped apostrophe run accepted by `accept`, returning
+/// the offset and the full run length. Runs the predicate rejects are skipped
+/// whole so a longer run never closes a shorter one.
+fn find_apostrophe_run(input: &str, accept: impl Fn(usize) -> bool) -> Option<(usize, usize)> {
+    let mut pos = 0;
+    while pos < input.len() {
+        let rest = &input[pos..];
+        if let Some(stripped) = rest.strip_prefix('\\') {
+            pos += 1;
+            if let Some(c) = stripped.chars().next() {
+                pos += c.len_utf8();
+            }
+            continue;
+        }
+        let run = apostrophe_run(rest);
+        if run > 0 {
+            if accept(run) {
+                return Some((pos, run));
+            }
+            pos += run;
+            continue;
+        }
+        pos += rest.chars().next().unwrap().len_utf8();
+    }
+    None
+}
+
+/// Whether an emphasis body is free of constructs that could swallow a
+/// virtually appended closer: escapes, brackets, and braces.
+fn simple_emphasis_body(body: &str) -> bool {
+    !body
+        .bytes()
+        .any(|b| matches!(b, b'\\' | b'[' | b']' | b'{' | b'}'))
+}
+
+/// Whether a body contains an odd number of emphasis openers of `width`; a
+/// three-apostrophe width also counts a four-apostrophe run, which opens bold
+/// and leaves one literal apostrophe.
+fn odd_emphasis_runs(body: &str, width: usize) -> bool {
+    let mut parity = false;
+    let mut pos = 0;
+    while pos < body.len() {
+        let rest = &body[pos..];
+        if let Some(stripped) = rest.strip_prefix('\\') {
+            pos += 1;
+            if let Some(c) = stripped.chars().next() {
+                pos += c.len_utf8();
+            }
+            continue;
+        }
+        let run = apostrophe_run(rest);
+        if run > 0 {
+            if run == width || (width == 3 && run == 4) {
+                parity = !parity;
+            }
+            pos += run;
+            continue;
+        }
+        pos += rest.chars().next().unwrap().len_utf8();
+    }
+    parity
+}
+
+/// NamuMark macros that take no arguments.
+const NAMUMARK_MACROS: &[&str] = &[
+    "br",
+    "date",
+    "datetime",
+    "tableofcontents",
+    "목차",
+    "footnote",
+    "각주",
+    "clearfix",
+    "pagecount",
+];
+
+/// NamuMark macros that only count as macros when parentheses are present
+/// (the argument-carrying `[name(...)]` form).
+const NAMUMARK_MACROS_WITH_ARGUMENTS: &[&str] = &[
+    "include",
+    "age",
+    "dday",
+    "youtube",
+    "nicovideo",
+    "vimeo",
+    "navertv",
+    "ruby",
+    "anchor",
+];
+
+fn is_namumark_macro(inner: &str) -> bool {
+    let (name, has_parentheses) = inner
+        .split_once('(')
+        .map_or((inner, false), |(name, _)| (name, true));
+    if NAMUMARK_MACROS_WITH_ARGUMENTS
+        .iter()
+        .any(|macro_name| name.eq_ignore_ascii_case(macro_name))
+    {
+        return has_parentheses;
+    }
+    NAMUMARK_MACROS
+        .iter()
+        .any(|macro_name| name.eq_ignore_ascii_case(macro_name))
+}
+
+fn is_namumark_footnote(inner: &str) -> bool {
+    inner.starts_with('*')
+}
+
 fn unescape(input: &str) -> String {
     let mut out = String::new();
     let mut chars = input.chars();
