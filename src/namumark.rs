@@ -381,10 +381,18 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
+                // A link target is "page#fragment"; only the page part is relative. Split the
+                // fragment once so '#' is never treated as a path separator.
+                let (title_page, title_fragment) = title
+                    .split_once('#')
+                    .map_or((title, None), |(page, fragment)| (page, Some(fragment)));
+                // '\#' is a literal title character, not a fragment separator
+                // (docs/namumark.md: never reinterpret escaped syntax), so the separator is
+                // located on the raw title and only an unescaped fragment can be automatic.
                 if !external
-                    && title
-                        .split_once('#')
-                        .is_some_and(|(_, fragment)| is_automatic_section_anchor(fragment))
+                    && find_unescaped(raw_title, "#").is_some_and(|hash| {
+                        is_automatic_section_anchor(&unescape(&raw_title[hash + 1..]))
+                    })
                 {
                     diagnostics.push(Diagnostic::loss(
                         base + i..base + i + end + 4,
@@ -408,23 +416,25 @@ fn inlines(
                     i += end + 4;
                     continue;
                 }
-                let resolved = if let Some(child) = title.strip_prefix('/') {
+                let resolved_page = if let Some(child) = title_page.strip_prefix('/') {
                     if context.page_title.is_empty() {
                         diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
                             "relative link requires page title",
                         ));
-                        title.to_owned()
+                        title_page.to_owned()
+                    } else if child.is_empty() {
+                        context.page_title.to_owned()
                     } else {
                         format!("{}/{child}", context.page_title)
                     }
-                } else if let Some(child) = title.strip_prefix("../") {
+                } else if let Some(child) = title_page.strip_prefix("../") {
                     if context.page_title.is_empty() {
                         diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
                             "relative link requires page title",
                         ));
-                        title.to_owned()
+                        title_page.to_owned()
                     } else {
                         let parent = context
                             .page_title
@@ -437,7 +447,11 @@ fn inlines(
                         }
                     }
                 } else {
-                    title.to_owned()
+                    title_page.to_owned()
+                };
+                let resolved = match title_fragment {
+                    Some(fragment) => format!("{resolved_page}#{fragment}"),
+                    None => resolved_page,
                 };
                 let resolved = if target == Format::Wikitext {
                     resolved
