@@ -250,3 +250,88 @@ fn mediawiki_link_conversion_emits_a_real_namumark_link() {
         document::document_structure("<p><a href=\"./Orchard\">visit</a></p>"),
     );
 }
+
+#[test]
+fn recognized_namumark_macros_and_footnotes_stay_located_exclusions() {
+    use rwikitext::convert_with_mode;
+    for input in [
+        "[* footnote]",
+        "[*A]",
+        "[include(틀:X)]",
+        "[date]",
+        "[목차]",
+        "[footnote]",
+        "[youtube(id)]",
+        "[anchor(keepall)]",
+        "[age(2000-01-01)]",
+        "[DATE]",
+        "[Include(x)]",
+    ] {
+        let result = run(Format::NamuMark, Format::Html, input);
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "input {input}: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(
+            result.diagnostics[0].kind,
+            DiagnosticKind::ConversionLoss,
+            "input {input}"
+        );
+        assert_eq!(result.diagnostics[0].span, 0..input.len(), "input {input}");
+        assert_eq!(
+            document::document_structure(&result.content),
+            document::document_structure(&format!("<p>{input}</p>")),
+            "input {input}"
+        );
+        let error = convert_with_mode(
+            ConversionRequest {
+                source: Format::NamuMark,
+                target: Format::Html,
+                input,
+                context: &WikiContext::default(),
+            },
+            ConversionMode::Strict,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.kind == DiagnosticKind::ConversionLoss),
+            "input {input}"
+        );
+    }
+}
+
+#[test]
+fn br_macro_name_matches_ascii_case_insensitively() {
+    use rwikitext::convert_with_mode;
+    for input in ["[br]", "[BR]", "[Br]"] {
+        let result = run(Format::NamuMark, Format::Html, input);
+        assert!(
+            result.diagnostics.is_empty(),
+            "input {input}: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(
+            document::document_structure(&result.content),
+            document::document_structure("<p><br></p>"),
+            "input {input}"
+        );
+        assert!(
+            convert_with_mode(
+                ConversionRequest {
+                    source: Format::NamuMark,
+                    target: Format::Html,
+                    input,
+                    context: &WikiContext::default(),
+                },
+                ConversionMode::Strict,
+            )
+            .is_ok(),
+            "input {input}"
+        );
+    }
+}

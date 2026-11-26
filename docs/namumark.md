@@ -14,13 +14,13 @@ The [fixture manifest](namumark-baseline.json) fixes original hand-reviewed sema
 | --- | --- | --- |
 | Text | UTF-8, blank-line paragraphs | Nonblank source newline is a line break; retain original-input diagnostic offsets across CRLF normalization. |
 | Headings | One to six matched equals signs, spaces inside, complete line: `== Orchard ==` | Preserve level/inline contents. Folded headings excluded; malformed heading-shaped lines diagnosed. |
-| Emphasis | Two/three apostrophes for italic/bold, balanced combinations | Preserve emphasis nesting. Unclosed markers diagnosed. Other formatting excluded. |
+| Emphasis | Two/three apostrophes for italic/bold, balanced combinations | Preserve emphasis nesting. Balanced/asymmetric nesting: symmetric `'''''x'''''` renders italic outside bold; `'''''x''' y''` closes bold first and renders italic outside bold; `'''''x'' y'''` closes italic first and renders bold outside italic. An italic closer may take the leading two apostrophes of a five-or-more run (leaving the rest to open bold), and a shared five-apostrophe run can close an inner bold/italic opened inside the outer style (e.g. `''italic'''bold-italic'''''`). A four-apostrophe run is bold plus one literal apostrophe and never closes italic (`''''x''''` renders `<b>'x</b>'`). Unclosed markers diagnosed. Other formatting excluded. |
 | Escape | Backslash before one character | Escape one character, not whole delimiters; trailing backslash literal. Never reinterpret escaped syntax in later stages. |
 | Links | `[[Orchard]]`, `[[Orchard\|visit]]`, `[[https://example.org/a\|visit]]` | Same label/destination under independent policy below. Supported inline labels, no nested links/media. |
 | Inline literal | Triple braces without newline/directive | Literal monospaced content, no nested evaluation. |
 | Literal block | Untyped triple-brace opener/closer on separate lines | Preserve preformatted content/newlines. HTML/wiki/syntax/color/size directives excluded. |
 | Lists | Top-level ` * item` and ` 1. item` | One leading space and space after marker. Nested/mixed/continuation lists and other numbering excluded. |
-| Break | `[br]` | Explicit line break, the sole supported macro. |
+| Break | `[br]` | Explicit line break, the sole supported macro. The macro name matches ASCII case-insensitively (`[BR]`, `[Br]`). |
 | Rule | Whole line of four to nine hyphens, optional leading spaces | Emit `----`; three/ten hyphens remain plain text. |
 | Categories | `[[분류:Orchards]]`, optional `\|sort key` | Membership/index sort metadata. `[[:분류:Orchards]]` visible link. Blur excluded. |
 | Redirect | Standalone `#redirect Orchard` or `#넘겨주기 Orchard` | Metadata target with supported fragment; emit `#redirect`. Diagnose extra nonblank content instead of deleting silently. |
@@ -29,7 +29,7 @@ Code mappings have delimiter limits when emitting NamuMark. An inline code value
 
 Standalone lists at document start are accepted by this converter profile. The snapshot mentions a preceding-content dependency near its comments section; this permissive rule is not a claim about live NamuWiki behavior.
 
-Tables, including simple rectangular tables, are excluded. Preserve the entire table visibly as escaped literal text with a located loss, rather than reading cells as another dialect. Also excluded: footnotes/references, quotations, media/files/video, includes and other macros, custom/numbered section anchors, HTML/CSS directives, folding, editor comments, advanced namespace/link options, and syntax only in the unprovided advanced/developer help. Recognized excluded constructs receive conversion-loss diagnostics even if their literal text survives.
+Tables, including simple rectangular tables, are excluded. Preserve the entire table visibly as escaped literal text with a located loss, rather than reading cells as another dialect. Also excluded: footnotes/references, quotations, media/files/video, includes and other macros, custom/numbered section anchors, HTML/CSS directives, folding, editor comments, advanced namespace/link options, and syntax only in the unprovided advanced/developer help. Recognized excluded constructs receive conversion-loss diagnostics even if their literal text survives. Among single-bracket inline constructs, only recognized macro or footnote forms are diagnosed: footnote `[* …]`; bare macros `date`, `datetime`, `tableofcontents`/`목차`, `footnote`/`각주`, `clearfix`, and `pagecount`; argument-required macros `include`, `age`, `dday`, `youtube`, `nicovideo`, `vimeo`, `navertv`, `ruby`, and `anchor`, which count as macros only when parentheses are present (`br` is supported; a parenthesized `br(...)` is treated as an excluded macro). Latin macro names match ASCII case-insensitively; Korean names match exactly. Ordinary prose such as `[1]` or `[sic]` is literal text and is not diagnosed.
 
 ## Six-direction mappings
 
