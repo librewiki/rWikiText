@@ -21,7 +21,7 @@ assert.match(failed.error, /Node lookup failed/);
 console.log('Node callback success and failure verified');
 
 const inputs = { namumark: "== 제목 ==\n'''안녕'''", wikitext: "== 제목 ==\n'''안녕'''", gfm: '## 제목\n\n**안녕**', html: '<h2>제목</h2><p><strong>안녕</strong></p>' };
-const markers = { namumark: ['==', "'''"], wikitext: ['==', "'''"], gfm: ['##', '**'], html: ['<h2', '<b'] };
+const markers = { namumark: ['==', "'''"], wikitext: ['==', "'''"], gfm: ['##', '**'], html: ['<h2', '<strong'] };
 for (const other of ['wikitext', 'gfm', 'html']) for (const [source, target] of [['namumark', other], [other, 'namumark']]) {
   const converted = wiki.convert({ source, target, input: inputs[source] });
   assert.equal(converted.ok, true, JSON.stringify(converted));

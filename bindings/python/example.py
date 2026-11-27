@@ -25,7 +25,7 @@ assert not failed["ok"] and "Python lookup failed" in failed["error"], failed
 print("Python callback success and failure verified")
 
 inputs = {"namumark": "== 제목 ==\n'''안녕'''", "wikitext": "== 제목 ==\n'''안녕'''", "gfm": "## 제목\n\n**안녕**", "html": "<h2>제목</h2><p><strong>안녕</strong></p>"}
-markers = {"namumark": ("==", "'''"), "wikitext": ("==", "'''"), "gfm": ("##", "**"), "html": ("<h2", "<b")}
+markers = {"namumark": ("==", "'''"), "wikitext": ("==", "'''"), "gfm": ("##", "**"), "html": ("<h2", "<strong")}
 for other in ("wikitext", "gfm", "html"):
     for source, target in (("namumark", other), (other, "namumark")):
         result = wiki.convert({"source": source, "target": target, "input": inputs[source]})

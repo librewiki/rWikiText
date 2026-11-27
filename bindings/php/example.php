@@ -44,7 +44,7 @@ check(!$limit['ok'] && in_array('expansion_limit', array_column($limit['diagnost
 echo "rWikiText PHP example passed\n";
 
 $inputs = ['namumark' => "== 제목 ==\n'''안녕'''", 'wikitext' => "== 제목 ==\n'''안녕'''", 'gfm' => "## 제목\n\n**안녕**", 'html' => '<h2>제목</h2><p><strong>안녕</strong></p>'];
-$markers = ['namumark' => ['==', "'''"], 'wikitext' => ['==', "'''"], 'gfm' => ['##', '**'], 'html' => ['<h2', '<b']];
+$markers = ['namumark' => ['==', "'''"], 'wikitext' => ['==', "'''"], 'gfm' => ['##', '**'], 'html' => ['<h2', '<strong']];
 foreach (['wikitext', 'gfm', 'html'] as $other) foreach ([['namumark', $other], [$other, 'namumark']] as [$source, $target]) {
     $converted = rwikitext_convert(['source' => $source, 'target' => $target, 'input' => $inputs[$source]]);
     check($converted['ok'], json_encode($converted));

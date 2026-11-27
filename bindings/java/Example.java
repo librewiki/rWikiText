@@ -17,7 +17,7 @@ public class Example {
         if (!failed.contains("\"ok\":false") || !failed.contains("offline") || !failed.contains("wiki_lookup")) throw new AssertionError(failed);
         String[] names = {"namumark", "wikitext", "gfm", "html"};
         String[] inputs = {"== 제목 ==\\n'''안녕'''", "== 제목 ==\\n'''안녕'''", "## 제목\\n\\n**안녕**", "<h2>제목</h2><p><strong>안녕</strong></p>"};
-        String[][] markers = {{"==", "'''"}, {"==", "'''"}, {"##", "**"}, {"<h2", "<b"}};
+        String[][] markers = {{"==", "'''"}, {"==", "'''"}, {"##", "**"}, {"<h2", "<strong"}};
         for (int other = 1; other < names.length; other++) for (int direction = 0; direction < 2; direction++) {
             int source = direction == 0 ? 0 : other, target = direction == 0 ? other : 0;
             String converted = WikiText.convert("{\"source\":\"" + names[source] + "\",\"target\":\"" + names[target] + "\",\"input\":\"" + inputs[source] + "\"}", null);
