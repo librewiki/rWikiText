@@ -266,6 +266,7 @@ fn recognized_namumark_macros_and_footnotes_stay_located_exclusions() {
         "[age(2000-01-01)]",
         "[DATE]",
         "[Include(x)]",
+        "[br(1)]",
     ] {
         let result = run(Format::NamuMark, Format::Html, input);
         assert_eq!(

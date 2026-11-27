@@ -243,6 +243,63 @@ fn namumark_combined_emphasis_falls_back_without_symmetric_closer() {
 }
 
 #[test]
+fn namumark_same_line_asymmetric_and_symmetric_combined_emphasis() {
+    use rwikitext::{convert_with_mode, ConversionMode};
+    let context = WikiContext::default();
+    let cases = [
+        (
+            "'''''a''' b'' and '''''c'''''",
+            "<p><em><strong>a</strong> b</em> and <em><strong>c</strong></em></p>",
+            "'''''a''' b'' and '''''c'''''",
+            "***a** b* and ***c***",
+        ),
+        (
+            "'''''a'' b''' and '''''c'''''",
+            "<p><strong><em>a</em> b</strong> and <em><strong>c</strong></em></p>",
+            "'''''a'' b''' and '''''c'''''",
+            "***a* b** and ***c***",
+        ),
+        (
+            "'''''a''''' and '''''b''' c''",
+            "<p><em><strong>a</strong></em> and <em><strong>b</strong> c</em></p>",
+            "'''''a''''' and '''''b''' c''",
+            "***a*** and ***b** c*",
+        ),
+        (
+            "'''''a''' b'' and '''''c'' d'''",
+            "<p><em><strong>a</strong> b</em> and <strong><em>c</em> d</strong></p>",
+            "'''''a''' b'' and '''''c'' d'''",
+            "***a** b* and ***c* d**",
+        ),
+    ];
+    for (input, html, wikitext, gfm) in cases {
+        for (target, expected) in [
+            (Format::Html, html),
+            (Format::Wikitext, wikitext),
+            (Format::Gfm, gfm),
+        ] {
+            let request = ConversionRequest {
+                source: Format::NamuMark,
+                target,
+                input,
+                context: &context,
+            };
+            let result = convert(request).unwrap();
+            assert_eq!(result.content, expected, "target {target:?} input {input}");
+            assert!(
+                result.diagnostics.is_empty(),
+                "target {target:?} input {input}: {:?}",
+                result.diagnostics
+            );
+            assert!(
+                convert_with_mode(request, ConversionMode::Strict).is_ok(),
+                "target {target:?} input {input}"
+            );
+        }
+    }
+}
+
+#[test]
 fn namumark_unclosed_combined_emphasis_is_one_located_loss() {
     use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
     let context = WikiContext::default();
@@ -315,6 +372,9 @@ fn namumark_ordinary_brackets_remain_literal_text() {
         "[TODO(fix)]",
         "[anchor]",
         "[include]",
+        "[include(foo]",
+        "[youtube(id]",
+        "[br(1]",
     ] {
         for target in [Format::Html, Format::Wikitext, Format::Gfm] {
             let request = ConversionRequest {
@@ -577,6 +637,32 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
         result.diagnostics[0].span
     );
     assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+
+    // Four-apostrophe runs are bold plus one literal apostrophe on each side.
+    let input = "''''x''''";
+    for (target, expected) in [
+        (Format::Html, "<p><strong>'x</strong>'</p>"),
+        (Format::Wikitext, "'''&#39;x'''&#39;"),
+        (Format::Gfm, "**\\'x**\\'"),
+    ] {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "target {target:?} input {input}");
+        assert!(
+            result.diagnostics.is_empty(),
+            "target {target:?} input {input}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            convert_with_mode(request, ConversionMode::Strict).is_ok(),
+            "target {target:?} input {input}"
+        );
+    }
 }
 
 /// Count apostrophes in converted output, normalizing the escape forms the

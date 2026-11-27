@@ -428,18 +428,25 @@ impl InlineParser<'_, '_> {
                         i += end + 4;
                         continue;
                     }
-                    // A link target is "page#fragment"; only the page part is relative. Split the
-                    // fragment once so '#' is never treated as a path separator.
-                    let (title_page, title_fragment) = title
-                        .split_once('#')
-                        .map_or((title, None), |(page, fragment)| (page, Some(fragment)));
-                    // '\#' is a literal title character, not a fragment separator
-                    // (docs/namumark.md: never reinterpret escaped syntax), so the separator is
-                    // located on the raw title and only an unescaped fragment can be automatic.
+                    // A link target is "page#fragment"; only an unescaped '#' starts a
+                    // fragment (docs/namumark.md: never reinterpret escaped syntax), so
+                    // split on raw_title before unescaping and keep page/fragment separate
+                    // through relative resolution and URL encoding.
+                    let (title_page, title_fragment) = if external {
+                        (title.to_owned(), None)
+                    } else {
+                        match find_unescaped(raw_title, "#") {
+                            Some(hash) => (
+                                unescape(&raw_title[..hash]),
+                                Some(unescape(&raw_title[hash + 1..])),
+                            ),
+                            None => (title.to_owned(), None),
+                        }
+                    };
                     if !external
-                        && find_unescaped(raw_title, "#").is_some_and(|hash| {
-                            is_automatic_section_anchor(&unescape(&raw_title[hash + 1..]))
-                        })
+                        && title_fragment
+                            .as_deref()
+                            .is_some_and(is_automatic_section_anchor)
                     {
                         self.diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
@@ -451,9 +458,10 @@ impl InlineParser<'_, '_> {
                     }
                     if self.target == Format::Wikitext
                         && !external
-                        && title
+                        && (title
                             .chars()
                             .any(|c| matches!(c, '[' | ']' | '{' | '}' | '|'))
+                            || title_page.contains('#'))
                     {
                         self.diagnostics.push(Diagnostic::loss(
                             base + i..base + i + end + 4,
@@ -469,7 +477,7 @@ impl InlineParser<'_, '_> {
                                 base + i..base + i + end + 4,
                                 "relative link requires page title",
                             ));
-                            title_page.to_owned()
+                            title_page.clone()
                         } else if child.is_empty() {
                             self.context.page_title.to_owned()
                         } else {
@@ -481,7 +489,7 @@ impl InlineParser<'_, '_> {
                                 base + i..base + i + end + 4,
                                 "relative link requires page title",
                             ));
-                            title_page.to_owned()
+                            title_page.clone()
                         } else {
                             let parent = self
                                 .context
@@ -495,32 +503,31 @@ impl InlineParser<'_, '_> {
                             }
                         }
                     } else {
-                        title_page.to_owned()
+                        title_page.clone()
                     };
-                    let resolved = match title_fragment {
-                        Some(fragment) => format!("{resolved_page}#{fragment}"),
-                        None => resolved_page,
-                    };
-                    let resolved = if self.target == Format::Wikitext {
-                        resolved
+                    let resolved_page = if self.target == Format::Wikitext {
+                        resolved_page
                             .strip_prefix(":분류:")
-                            .map_or(resolved.clone(), |name| format!(":Category:{name}"))
+                            .map_or(resolved_page.clone(), |name| format!(":Category:{name}"))
                     } else {
-                        resolved
+                        resolved_page
                     };
                     let href = if external {
-                        resolved
-                    } else if resolved.starts_with('#') {
-                        format!("#{}", inline::encode_component(&resolved[1..]))
+                        resolved_page
+                    } else if resolved_page.is_empty() {
+                        match title_fragment.as_deref() {
+                            Some(fragment) => format!("#{}", inline::encode_component(fragment)),
+                            None => String::new(),
+                        }
                     } else {
-                        let title = resolved.strip_prefix(':').unwrap_or(&resolved);
-                        match title.split_once('#') {
-                            Some((page, fragment)) => format!(
+                        let page = resolved_page.strip_prefix(':').unwrap_or(&resolved_page);
+                        match title_fragment.as_deref() {
+                            Some(fragment) => format!(
                                 "./{}#{}",
                                 inline::encode_component(page),
                                 inline::encode_component(fragment)
                             ),
-                            None => format!("./{}", inline::encode_component(title)),
+                            None => format!("./{}", inline::encode_component(page)),
                         }
                     };
                     if self.target == Format::Wikitext && !external && changes_wiki_title(title) {
@@ -606,10 +613,11 @@ impl InlineParser<'_, '_> {
     ///
     /// Two apostrophes are italic, three or four are bold (a fourth opener or
     /// closer apostrophe stays literal), and five or more combine both. A combined
-    /// opener prefers the first run of five or more apostrophes as the symmetric
-    /// closer, so nested short markers stay inside the body, and only falls back
-    /// to the earliest short run (two, three, or four apostrophes) when no 5+ run
-    /// exists. Symmetric closers nest bold inside italic; a two-apostrophe closer
+    /// opener uses an earlier asymmetric closer pair (`'''` then `''`, or `''`
+    /// then `'''`) when one closes cleanly before the first five-or-more run on
+    /// the same line; otherwise it prefers the first run of five or more
+    /// apostrophes as the symmetric closer so nested short markers stay inside
+    /// the body, and falls back to the earliest short run when no 5+ run exists. Symmetric closers nest bold inside italic; a two-apostrophe closer
     /// closes italic first, so bold wraps the remainder, and a three- or
     /// four-apostrophe closer closes bold first, so italic wraps the remainder.
     /// Every closer is located before any recursive parsing so a failure never
@@ -680,14 +688,19 @@ impl InlineParser<'_, '_> {
             // remainder is re-lexed by the caller.
             consumed = body_end + append.len() + 3;
         } else {
-            // Five or more apostrophes combine italic and bold. Prefer the first
-            // run of five or more apostrophes as the symmetric closer so nested
-            // short markers (`''`, `'''`) stay in the body, and fall back to the
-            // earliest short run only when no 5+ run exists.
+            // Five or more apostrophes combine italic and bold. If an earlier
+            // asymmetric closer pair closes cleanly before the first 5+ run on
+            // the line, take it so a later combined opener is not misread as a
+            // symmetric closer; otherwise prefer the first 5+ run so nested
+            // short markers (`''`, `'''`) stay in the body.
             let body_start = opener;
-            let (closer_offset, closer_run) = find_run_at_least(&input[body_start..], 5)
-                .or_else(|| find_run_at_least(&input[body_start..], 2))
-                .ok_or(())?;
+            let (closer_offset, closer_run) = match find_run_at_least(&input[body_start..], 5) {
+                Some((sym_offset, sym_run)) => {
+                    find_asymmetric_closer_pair(&input[body_start..body_start + sym_offset])
+                        .unwrap_or((sym_offset, sym_run))
+                }
+                None => find_run_at_least(&input[body_start..], 2).ok_or(())?,
+            };
             let body_end = body_start + closer_offset;
             let node;
             if closer_run >= 5 {
@@ -765,6 +778,25 @@ fn find_unescaped(input: &str, needle: &str) -> Option<usize> {
         pos += rest.chars().next().unwrap().len_utf8();
     }
     None
+}
+
+/// Locate an asymmetric closer pair (`'''`/`''''` then `''`, or `''` then
+/// `'''`+) within `before_sym` when both short-marker parities are odd,
+/// indicating the opening 5+ run closes asymmetrically before a later 5+ run.
+fn find_asymmetric_closer_pair(before_sym: &str) -> Option<(usize, usize)> {
+    if !(odd_emphasis_runs(before_sym, 2) && odd_emphasis_runs(before_sym, 3)) {
+        return None;
+    }
+    let (offset, run) = find_run_at_least(before_sym, 2)?;
+    if run == 2 {
+        find_run_at_least(&before_sym[offset + 2..], 3)?;
+        Some((offset, run))
+    } else if run == 3 || run == 4 {
+        find_exact_run(&before_sym[offset + 3..], 2)?;
+        Some((offset, run))
+    } else {
+        None
+    }
 }
 
 /// Number of leading apostrophes in `input`.
@@ -882,18 +914,18 @@ const NAMUMARK_MACROS_WITH_ARGUMENTS: &[&str] = &[
 ];
 
 fn is_namumark_macro(inner: &str) -> bool {
-    let (name, has_parentheses) = inner
-        .split_once('(')
-        .map_or((inner, false), |(name, _)| (name, true));
-    if NAMUMARK_MACROS_WITH_ARGUMENTS
-        .iter()
-        .any(|macro_name| name.eq_ignore_ascii_case(macro_name))
-    {
-        return has_parentheses;
+    if let Some((name, args)) = inner.split_once('(') {
+        if !args.ends_with(')') {
+            return false;
+        }
+        return NAMUMARK_MACROS_WITH_ARGUMENTS
+            .iter()
+            .chain(NAMUMARK_MACROS.iter())
+            .any(|macro_name| name.eq_ignore_ascii_case(macro_name));
     }
     NAMUMARK_MACROS
         .iter()
-        .any(|macro_name| name.eq_ignore_ascii_case(macro_name))
+        .any(|macro_name| inner.eq_ignore_ascii_case(macro_name))
 }
 
 fn is_namumark_footnote(inner: &str) -> bool {

@@ -93,7 +93,7 @@ cargo test --locked
 
 The default suite exercises conversion, round trips, diagnostics, and wiki data callbacks through the Rust API and CLI. The full compatibility suite also uses a verified MediaWiki archive and a local PHP runtime. [Full compatibility test instructions](docs/compatibility.md#first-release-verification)
 
-The CLI and C ABI call the conversion pipeline in [`src/lib.rs`](src/lib.rs). The pipeline parses input into internal document blocks, renders them in the target format, and returns the result with page metadata and diagnostics. For wikitext input it also expands templates and resolves links using the caller's wiki data. See the [domain glossary](GLOSSARY.md) and [conversion design](docs/adr/0001-parsoid-and-document-fidelity.md).
+The CLI ([`src/main.rs`](src/main.rs)) and C ABI ([`src/ffi.rs`](src/ffi.rs)) call the public Rust facade in [`src/lib.rs`](src/lib.rs), which delegates to the internal conversion pipeline in [`src/pipeline.rs`](src/pipeline.rs). Dedicated internal modules handle format parsing (including [`src/wikitext.rs`](src/wikitext.rs), [`src/namumark.rs`](src/namumark.rs), and [`src/html.rs`](src/html.rs)), inline rendering ([`src/render.rs`](src/render.rs)), and original-input span mapping ([`src/spans.rs`](src/spans.rs)). For MediaWiki wikitext input the pipeline also expands templates and resolves links using the caller's wiki data, returning converted content with page metadata and diagnostics. See the [domain glossary](GLOSSARY.md) and [conversion design](docs/adr/0001-parsoid-and-document-fidelity.md).
 
 For contributions, follow the repository's issue, branch, and pull request workflow. [Contributor and agent instructions](AGENTS.md) · [Work lifecycle](docs/agents/issue-tracker.md#work-lifecycle)
 

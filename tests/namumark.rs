@@ -458,31 +458,135 @@ fn namumark_child_relative_link_without_child_resolves_to_current_page() {
 }
 
 #[test]
-fn namumark_escaped_hash_is_not_an_automatic_section_anchor() {
-    use rwikitext::{convert_with_mode, ConversionMode};
+fn namumark_escaped_hash_stays_literal_in_page_title() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
     let context = WikiContext::default();
     let cases = [
         (
+            r"[[Orchard\#s-1]]",
             Format::Html,
-            "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-1\">Orchard#s-1</a></p>",
+            "<p><a rel=\"mw:WikiLink\" href=\"./Orchard%23s-1\">Orchard#s-1</a></p>",
         ),
-        (Format::Wikitext, "[[Orchard#s-1|Orchard&#35;s&#45;1]]"),
-        (Format::Gfm, "[Orchard\\#s\\-1](<./Orchard#s-1>)"),
+        (
+            r"[[Orchard\#s-1]]",
+            Format::Gfm,
+            "[Orchard\\#s\\-1](<./Orchard%23s-1>)",
+        ),
+        (
+            r"[[Orchard\#1#note]]",
+            Format::Html,
+            "<p><a rel=\"mw:WikiLink\" href=\"./Orchard%231#note\">Orchard#1#note</a></p>",
+        ),
+        (
+            r"[[Orchard\#1#note]]",
+            Format::Gfm,
+            "[Orchard\\#1\\#note](<./Orchard%231#note>)",
+        ),
     ];
-    for (target, expected) in cases {
+    for (input, target, expected) in cases {
         let request = ConversionRequest {
             source: Format::NamuMark,
             target,
-            input: r"[[Orchard\#s-1]]",
+            input,
             context: &context,
         };
         let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
+        assert_eq!(result.content, expected, "target {target:?} input {input}");
+        assert!(
+            result.diagnostics.is_empty(),
+            "target {target:?} input {input}: {:?}",
+            result.diagnostics
+        );
         assert!(
             convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?}"
+            "target {target:?} input {input}"
         );
+    }
+
+    // MediaWiki cannot represent a literal '#' in a page title without turning
+    // it into a fragment delimiter, so Wikitext emits a located conversion loss.
+    let input = r"[[Orchard\#s-1]]";
+    let request = ConversionRequest {
+        source: Format::NamuMark,
+        target: Format::Wikitext,
+        input,
+        context: &context,
+    };
+    let result = convert(request).unwrap();
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss);
+    assert_eq!(result.diagnostics[0].span, 0..input.len());
+    assert!(!result.content.contains("[[Orchard#s-1"));
+    assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
+}
+
+#[test]
+fn namumark_relative_links_preserve_escaped_hash_in_page_title() {
+    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
+    let context = WikiContext {
+        page_title: "Parent/Child",
+        ..WikiContext::default()
+    };
+    let cases = [
+        (
+            r"[[../\#note]]",
+            Format::Html,
+            "<p><a rel=\"mw:WikiLink\" href=\"./Parent/%23note\">../#note</a></p>",
+        ),
+        (
+            r"[[../\#note]]",
+            Format::Gfm,
+            "[\\.\\.\\/\\#note](<./Parent/%23note>)",
+        ),
+        (
+            r"[[/\#note]]",
+            Format::Html,
+            "<p><a rel=\"mw:WikiLink\" href=\"./Parent/Child/%23note\">/#note</a></p>",
+        ),
+        (
+            r"[[/\#note]]",
+            Format::Gfm,
+            "[\\/\\#note](<./Parent/Child/%23note>)",
+        ),
+    ];
+    for (input, target, expected) in cases {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert_eq!(result.content, expected, "target {target:?} input {input}");
+        assert!(
+            result.diagnostics.is_empty(),
+            "target {target:?} input {input}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            convert_with_mode(request, ConversionMode::Strict).is_ok(),
+            "target {target:?} input {input}"
+        );
+    }
+
+    for input in [r"[[../\#note]]", r"[[/\#note]]"] {
+        let request = ConversionRequest {
+            source: Format::NamuMark,
+            target: Format::Wikitext,
+            input,
+            context: &context,
+        };
+        let result = convert(request).unwrap();
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "input {input}: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.diagnostics[0].kind, DiagnosticKind::ConversionLoss);
+        assert_eq!(result.diagnostics[0].span, 0..input.len());
+        assert!(!result.content.contains("[[Parent"));
+        assert!(convert_with_mode(request, ConversionMode::Strict).is_err());
     }
 }
 
