@@ -64,3 +64,12 @@ jobs:
     uses: ./.github/workflows/publish-node.yml
     with:
       ref: ${{ needs.gate.outputs.ref }}
+
+  publish-python:
+    needs: gate
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-python.yml
+    with:
+      ref: ${{ needs.gate.outputs.ref }}

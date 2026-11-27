@@ -1,1 +1,7 @@
 __pycache__/
+build/
+dist/
+*.egg-info/
+rwikitext/*.so
+rwikitext/*.dylib
+rwikitext/*.dll

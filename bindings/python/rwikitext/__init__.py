@@ -1,15 +1,37 @@
 """Synchronous ctypes binding for the rWikiText v1 C ABI."""
 import ctypes
 import json
+from pathlib import Path
+import sys
+
+__version__ = "1.0.0"
+__all__ = ["WikiText", "__version__"]
 
 _CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32,
                              ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
 _OPERATIONS = {1: "template_text", 2: "page_exists", 3: "file_info"}
 
 
+def _default_library_path():
+    if sys.platform == "win32":
+        filename = "rwikitext.dll"
+    elif sys.platform == "darwin":
+        filename = "librwikitext.dylib"
+    else:
+        filename = "librwikitext.so"
+    candidate = Path(__file__).resolve().parent / filename
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            f"Bundled native library not found at {candidate}. "
+            "Install a platform wheel from PyPI or pass library_path explicitly."
+        )
+    return candidate
+
+
 class WikiText:
-    def __init__(self, library_path):
-        self._lib = ctypes.CDLL(str(library_path))
+    def __init__(self, library_path=None):
+        resolved_path = _default_library_path() if library_path is None else library_path
+        self._lib = ctypes.CDLL(str(resolved_path))
         self._lib.rwikitext_v1_abi_version.restype = ctypes.c_uint32
         if self._lib.rwikitext_v1_abi_version() != 1:
             raise RuntimeError("unsupported rWikiText ABI version")
