@@ -42,3 +42,21 @@ check(in_array('wiki_lookup', array_column($failure['diagnostics'], 'kind'), tru
 $limit = rwikitext_convert(['source' => 'wikitext', 'target' => 'html', 'input' => '{{Hello|world}}', 'expansion_limits' => ['max_expansions' => 0]], $lookup);
 check(!$limit['ok'] && in_array('expansion_limit', array_column($limit['diagnostics'], 'kind'), true), 'expansion limit was not enforced');
 echo "rWikiText PHP example passed\n";
+
+$inputs = ['namumark' => "== 제목 ==\n'''안녕'''", 'wikitext' => "== 제목 ==\n'''안녕'''", 'gfm' => "## 제목\n\n**안녕**", 'html' => '<h2>제목</h2><p><strong>안녕</strong></p>'];
+$markers = ['namumark' => ['==', "'''"], 'wikitext' => ['==', "'''"], 'gfm' => ['##', '**'], 'html' => ['<h2', '<strong']];
+foreach (['wikitext', 'gfm', 'html'] as $other) foreach ([['namumark', $other], [$other, 'namumark']] as [$source, $target]) {
+    $converted = rwikitext_convert(['source' => $source, 'target' => $target, 'input' => $inputs[$source]]);
+    check($converted['ok'], json_encode($converted));
+    foreach (array_merge(['제목', '안녕'], $markers[$target]) as $part) check(str_contains($converted['content'], $part), json_encode($converted));
+}
+
+$namuCalls = 0;
+$unexpectedLookup = static function () use (&$namuCalls) { $namuCalls++; return null; };
+$category = rwikitext_convert(['source' => 'namumark', 'target' => 'gfm', 'input' => '[[분류:Example|Sort]]'], $unexpectedLookup);
+check($category['ok'] && $category['metadata']['categories'] === ['Example'] && $category['metadata']['category_sort_keys'] === ['Sort'], 'NamuMark category');
+check(in_array('conversion_loss', array_column($category['diagnostics'], 'kind'), true), 'NamuMark category diagnostic');
+$strict = rwikitext_convert(['source' => 'namumark', 'target' => 'html', 'input' => '||cell||', 'mode' => 'strict'], $unexpectedLookup);
+check(!$strict['ok'] && in_array('conversion_loss', array_column($strict['diagnostics'], 'kind'), true), 'NamuMark strict loss');
+$literal = rwikitext_convert(['source' => 'namumark', 'target' => 'html', 'input' => '{{{literal}}}'], $unexpectedLookup);
+check($literal['ok'] && $namuCalls === 0, 'NamuMark invoked lookup');

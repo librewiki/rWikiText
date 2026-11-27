@@ -112,5 +112,28 @@ int main(void) {
     contains(response, "\"ok\":false");
     contains(response, "\"kind\":\"conversion_loss\"");
     rwikitext_v1_free(response);
+    const char *names[] = {"namumark", "wikitext", "gfm", "html"};
+    const char *inputs[] = {"== 제목 ==\\n'''안녕'''", "== 제목 ==\\n'''안녕'''", "## 제목\\n\\n**안녕**", "<h2>제목</h2><p><strong>안녕</strong></p>"};
+    const char *headings[] = {"==", "==", "##", "<h2"};
+    const char *bold[] = {"'''", "'''", "**", "<strong"};
+    for (int other = 1; other < 4; ++other) for (int direction = 0; direction < 2; ++direction) {
+        int source = direction == 0 ? 0 : other, target = direction == 0 ? other : 0;
+        char request[512];
+        int written = snprintf(request, sizeof request, "{\"source\":\"%s\",\"target\":\"%s\",\"input\":\"%s\"}", names[source], names[target], inputs[source]);
+        assert(written > 0 && (size_t)written < sizeof request);
+        response = rwikitext_v1_convert(request, NULL, NULL);
+        contains(response, "\"ok\":true"); contains(response, "제목"); contains(response, "안녕");
+        contains(response, headings[target]); contains(response, bold[target]);
+        rwikitext_v1_free(response);
+    }
+    unsigned before = calls.templates + calls.pages + calls.files;
+    response = rwikitext_v1_convert("{\"source\":\"namumark\",\"target\":\"gfm\",\"input\":\"[[분류:Example|Sort]]\"}", lookup, &calls);
+    contains(response, "\"ok\":true"); contains(response, "\"categories\":[\"Example\"]");
+    contains(response, "\"category_sort_keys\":[\"Sort\"]"); contains(response, "conversion_loss"); rwikitext_v1_free(response);
+    response = rwikitext_v1_convert("{\"source\":\"namumark\",\"target\":\"html\",\"input\":\"||cell||\",\"mode\":\"strict\"}", lookup, &calls);
+    contains(response, "\"ok\":false"); contains(response, "conversion_loss"); rwikitext_v1_free(response);
+    response = rwikitext_v1_convert("{\"source\":\"namumark\",\"target\":\"html\",\"input\":\"{{{literal}}}\"}", lookup, &calls);
+    contains(response, "\"ok\":true"); rwikitext_v1_free(response);
+    assert(before == calls.templates + calls.pages + calls.files);
     return 0;
 }

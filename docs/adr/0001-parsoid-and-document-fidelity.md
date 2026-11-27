@@ -1,6 +1,6 @@
 # Use Parsoid as the wikitext compatibility reference
 
-rWikiText supports Wikitext ↔ GFM and Wikitext ↔ HTML. MediaWiki syntax documentation guides implementation, and Parsoid decides behavior where the documentation and rendering differ. Round-trip fidelity means preserving document meaning, with flexibility in the spelling and whitespace of equivalent wikitext.
+rWikiText supports Wikitext ↔ GFM, Wikitext ↔ HTML, and NamuMark ↔ MediaWiki wikitext, GFM, or HTML under the documented NamuMark first-release profile. MediaWiki syntax documentation guides implementation, and Parsoid decides behavior where the documentation and rendering differ. Round-trip fidelity means preserving document meaning, with flexibility in the spelling and whitespace of equivalent wikitext.
 
 ## Conversion contract
 
@@ -14,10 +14,10 @@ rWikiText supports Wikitext ↔ GFM and Wikitext ↔ HTML. MediaWiki syntax docu
 
 At implementation kickoff, pin the exact stable MediaWiki release and its Parsoid HTML specification version. Run the applicable official parser tests for the supported scope. Compare normalized HTML DOM and metadata that carries meaning. Verify reverse conversions by rendering their wikitext and comparing document meaning. Render GFM under the published specification and compare document structure. [MediaWiki parser tests](https://www.mediawiki.org/wiki/Manual%3AParser_tests)
 
-Start with paragraphs, headings, links, and lists. Exercise all four conversion directions and both round trips in the Rust library and CLI before extending coverage to Parsoid metadata, template callbacks, the rest of core syntax, and language bindings.
+The initial implementation started with paragraphs, headings, links, and lists. The four conversion directions and both round trips ran in the Rust library and CLI before coverage extended to Parsoid metadata, template callbacks, the rest of core syntax, and language bindings.
 
 ## Scope amendment: NamuMark (2026-11-24)
 
-The first-public-release plan now also includes NamuMark ↔ MediaWiki wikitext, NamuMark ↔ GFM, and NamuMark ↔ HTML. These six directions are planned; the four MediaWiki directions above remain the implemented contract. Direct GFM ↔ HTML and identity conversions remain outside the contract.
+The first-public-release scope also includes NamuMark ↔ MediaWiki wikitext, NamuMark ↔ GFM, and NamuMark ↔ HTML. These six directions are implemented in the shared Rust library and exposed through the CLI, C ABI, and bindings; the four MediaWiki directions above remain the original implemented contract. Direct GFM ↔ HTML and identity conversions remain outside the contract.
 
-Parsoid remains the reference for the MediaWiki side. NamuMark needs its own syntax baseline, expected results, metadata mappings, and loss behavior before implementation. The existing Parsoid metadata and MediaWiki template rules do not establish NamuMark compatibility. The [NamuMark plan](../namumark.md) records the work and release gates. This amendment expands format scope while retaining the document-meaning and strict-loss contract above.
+Parsoid remains the reference for the MediaWiki side. NamuMark required its own syntax baseline, expected results, metadata mappings, and loss behavior before implementation. The [NamuMark contract](../namumark.md) records that baseline, the implemented profile, and the remaining release gates. The existing Parsoid metadata and MediaWiki template rules do not establish NamuMark compatibility. This amendment expands format scope while retaining the document-meaning and strict-loss contract above.

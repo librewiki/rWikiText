@@ -33,7 +33,8 @@ uint32_t rwikitext_v1_abi_version(void);
 /* request_json is UTF-8 and NUL-terminated. A NULL lookup reports missing for
  * all titles. user_data is passed through unchanged. The returned JSON is owned
  * by the caller and must be released with rwikitext_v1_free. A NULL return
- * indicates an internal failure. See docs/native-bindings.md for the schema. */
+ * indicates an internal failure. Format names in the JSON include wikitext,
+ * gfm, html, and namumark. See docs/native-bindings.md for the schema. */
 const char *rwikitext_v1_convert(const char *request_json,
                                 rwikitext_v1_lookup_fn lookup, void *user_data);
 

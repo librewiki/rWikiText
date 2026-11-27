@@ -31,3 +31,11 @@ Inclusion of content from another wiki page, often a template evaluated with arg
 **Conversion loss**
 
 A part of the document meaning that the converted document cannot carry in its output format.
+
+**Raw output**
+
+The converted markup text returned directly for a requested target format, before any HTML rendering for visual inspection.
+
+**Conversion preview**
+
+An on-demand HTML rendering of **Raw output** used for visual inspection in the CLI web interface, separate from the primary document conversion.

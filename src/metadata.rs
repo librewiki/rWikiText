@@ -13,13 +13,13 @@ pub(crate) struct Extraction {
     pub ranges: Vec<std::ops::Range<usize>>,
 }
 
-fn valid_title(s: &str) -> bool {
+pub(crate) fn valid_title(s: &str) -> bool {
     !s.trim().is_empty()
         && !s
             .chars()
             .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>' | '?'))
 }
-fn valid_sort_key(s: &str) -> bool {
+pub(crate) fn valid_sort_key(s: &str) -> bool {
     !s.chars()
         .any(|c| c.is_control() || matches!(c, '[' | ']' | '{' | '}' | '|' | '<' | '>'))
 }
@@ -215,10 +215,9 @@ pub(crate) fn extract_wikitext(
             if let Some(n) = tag_end(rest) {
                 let tag = rest[..n].to_ascii_lowercase();
                 if ["script", "style", "nowiki", "pre"].iter().any(|name| {
-                    tag.strip_prefix(&format!("<{name}"))
-                        .is_some_and(|tail| {
-                            tail.starts_with([' ', '\t', '\r', '\n', '>']) || tail == "/>"
-                        })
+                    tag.strip_prefix(&format!("<{name}")).is_some_and(|tail| {
+                        tail.starts_with([' ', '\t', '\r', '\n', '>']) || tail == "/>"
+                    })
                 }) {
                     if tag.ends_with("/>") {
                         pos += n;
@@ -306,11 +305,15 @@ fn encode(s: &str) -> String {
     }
     out
 }
-fn href_title(s: &str) -> Option<String> {
+fn href_title(s: &str, preserve_spelling: bool) -> Option<String> {
     let raw = s.strip_prefix("./")?;
     let decoded = inline::decode_component(raw).ok()?;
     if valid_title(&decoded) {
-        Some(title(&decoded))
+        Some(if preserve_spelling {
+            decoded
+        } else {
+            title(&decoded)
+        })
     } else {
         None
     }
@@ -379,6 +382,21 @@ fn skip_inert(input: &str, mut pos: usize, name: &str) -> usize {
 pub(crate) fn extract_html(
     input: &str,
     ctx: &WikiContext<'_>,
+) -> Result<Extraction, ConversionError> {
+    extract_html_with_policy(input, ctx, false)
+}
+
+pub(crate) fn extract_html_for_namumark(
+    input: &str,
+    ctx: &WikiContext<'_>,
+) -> Result<Extraction, ConversionError> {
+    extract_html_with_policy(input, ctx, true)
+}
+
+fn extract_html_with_policy(
+    input: &str,
+    ctx: &WikiContext<'_>,
+    preserve_spelling: bool,
 ) -> Result<Extraction, ConversionError> {
     let mut e = empty();
     let mut ranges = Vec::new();
@@ -462,7 +480,7 @@ pub(crate) fn extract_html(
                 let (raw, sort) = href
                     .split_once('#')
                     .map_or((href, None), |(a, b)| (a, Some(b)));
-                if let Some(target) = href_title(raw) {
+                if let Some(target) = href_title(raw, preserve_spelling) {
                     if let Some(name) = target.strip_prefix("Category:") {
                         if valid_title(name) && !name.contains('#') {
                             let sort = match sort {
@@ -473,7 +491,11 @@ pub(crate) fn extract_html(
                                 pos = end;
                                 continue;
                             }
-                            e.metadata.categories.push(title(name));
+                            e.metadata.categories.push(if preserve_spelling {
+                                name.to_owned()
+                            } else {
+                                title(name)
+                            });
                             e.metadata.category_sort_keys.push(sort);
                             ranges.push((pos, end));
                             add(&mut e, pos, end, "category");
@@ -481,7 +503,7 @@ pub(crate) fn extract_html(
                     }
                 }
             } else if rel == "mw:PageProp/redirect" && e.metadata.redirect_target.is_none() {
-                if let Some(target) = href_title(href) {
+                if let Some(target) = href_title(href, preserve_spelling) {
                     e.metadata.redirect_target = Some(target);
                     ranges.push((pos, end));
                     add(&mut e, pos, end, "redirect");
@@ -560,17 +582,28 @@ pub(crate) fn render_wikitext(m: &PageMetadata) -> String {
     parts.join("\n")
 }
 pub(crate) fn render_html(m: &PageMetadata) -> String {
+    render_html_with_policy(m, false)
+}
+
+pub(crate) fn render_html_for_namumark(m: &PageMetadata) -> String {
+    render_html_with_policy(m, true)
+}
+
+fn render_html_with_policy(m: &PageMetadata, preserve_spelling: bool) -> String {
+    let transport = |value: &str| {
+        if preserve_spelling {
+            encode(value)
+        } else {
+            encode(&value.replace(' ', "_"))
+        }
+    };
     let mut parts = Vec::new();
     if let Some(t) = &m.redirect_target {
         parts.push(format!(
             "<link rel=\"mw:PageProp/redirect\" href=\"./{}\">",
             t.split_once('#').map_or_else(
-                || encode(&t.replace(' ', "_")),
-                |(page, fragment)| format!(
-                    "{}#{}",
-                    encode(&page.replace(' ', "_")),
-                    encode(&fragment.replace(' ', "_"))
-                )
+                || transport(t),
+                |(page, fragment)| format!("{}#{}", transport(page), transport(fragment))
             )
         ));
     }
@@ -590,7 +623,7 @@ pub(crate) fn render_html(m: &PageMetadata) -> String {
             .unwrap_or_default();
         parts.push(format!(
             "<link rel=\"mw:PageProp/Category\" href=\"./Category:{}{sort}\">",
-            encode(&c.replace(' ', "_"))
+            transport(c)
         ));
     }
     parts.join("\n")

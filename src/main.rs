@@ -1,3 +1,5 @@
+mod serve;
+
 use rwikitext::{
     convert_with_options, ConversionError, ConversionMode, ConversionOptions, ConversionRequest,
     FileInfo, Format, LookupError, WikiContext, WikiData,
@@ -5,7 +7,7 @@ use rwikitext::{
 use serde_json::Value;
 use std::io::{self, Read, Write};
 
-struct LocalWiki(Value);
+pub(crate) struct LocalWiki(Value);
 
 impl LocalWiki {
     fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
@@ -101,14 +103,101 @@ impl WikiData for LocalWiki {
     }
 }
 
+const CLI_USAGE: &str = "usage:\n  rwikitext <wikitext|gfm|html|namumark> <wikitext|gfm|html|namumark> [FILE|-] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]\n  rwikitext serve [--port PORT] [--bind ADDR] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]";
+
+const SERVE_USAGE: &str = "usage: rwikitext serve [--port PORT] [--bind ADDR] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]";
+
+fn run_serve(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut bind = String::from("127.0.0.1");
+    let mut port: u16 = 8080;
+    let mut page_title = None;
+    let mut site_language = None;
+    let mut reference_time = None;
+    let mut wiki_data_path = None;
+    let mut mode = ConversionMode::BestEffort;
+
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--port=") {
+            port = value
+                .parse()
+                .map_err(|_| format!("invalid value for --port: {value}"))?;
+        } else if let Some(value) = arg.strip_prefix("--bind=") {
+            bind = value.to_owned();
+        } else {
+            match arg.as_str() {
+                "-h" | "--help" => {
+                    println!("{SERVE_USAGE}");
+                    return Ok(());
+                }
+                "--port" => {
+                    let value = args.next().ok_or("missing value for --port")?;
+                    port = value
+                        .parse()
+                        .map_err(|_| format!("invalid value for --port: {value}"))?;
+                }
+                "--bind" => {
+                    bind = args.next().ok_or("missing value for --bind")?;
+                }
+                "--strict" => mode = ConversionMode::Strict,
+                "--wiki-data" => {
+                    wiki_data_path = Some(args.next().ok_or("missing value for --wiki-data")?)
+                }
+                "--page-title" => {
+                    page_title = Some(args.next().ok_or("missing value for --page-title")?)
+                }
+                "--site-language" => {
+                    site_language = Some(args.next().ok_or("missing value for --site-language")?)
+                }
+                "--reference-time" => {
+                    reference_time = Some(args.next().ok_or("missing value for --reference-time")?)
+                }
+                flag if flag.starts_with('-') => {
+                    return Err(format!("unknown option: {flag}").into())
+                }
+                unexpected => {
+                    return Err(
+                        format!("unexpected argument for serve: {unexpected}\n{SERVE_USAGE}")
+                            .into(),
+                    )
+                }
+            }
+        }
+    }
+
+    let local = wiki_data_path.as_deref().map(LocalWiki::load).transpose()?;
+    let defaults = WikiContext::default();
+    let fixture = |key| local.as_ref().and_then(|data| data.context(key));
+    let config = serve::ServeConfig {
+        bind,
+        port,
+        mode,
+        page_title: page_title
+            .or_else(|| fixture("page_title").map(str::to_owned))
+            .unwrap_or_else(|| defaults.page_title.to_owned()),
+        site_language: site_language
+            .or_else(|| fixture("site_language").map(str::to_owned))
+            .unwrap_or_else(|| defaults.site_language.to_owned()),
+        reference_time: reference_time
+            .or_else(|| fixture("reference_time").map(str::to_owned))
+            .unwrap_or_else(|| defaults.reference_time.to_owned()),
+        wiki_data: local,
+    };
+    serve::run(config)
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "serve") {
+        args.next();
+        return run_serve(args);
+    }
+
     let mut positional = Vec::new();
     let mut page_title = None;
     let mut site_language = None;
     let mut reference_time = None;
     let mut wiki_data_path = None;
     let mut mode = ConversionMode::BestEffort;
-    let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--strict" => mode = ConversionMode::Strict,
@@ -131,7 +220,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if !(2..=3).contains(&positional.len()) {
-        return Err("usage: rwikitext <wikitext|gfm|html> <wikitext|gfm|html> [FILE|-] [--wiki-data JSON] [--strict] [--page-title TITLE] [--site-language LANGUAGE] [--reference-time TIME]".into());
+        return Err(CLI_USAGE.into());
     }
     let source: Format = positional[0].parse()?;
     let target: Format = positional[1].parse()?;
