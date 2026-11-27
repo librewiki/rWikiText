@@ -1,0 +1,67 @@
+{
+  "name": "@librewiki/rwikitext",
+  "version": "0.1.0",
+  "description": "Node.js binding for rWikiText (MediaWiki wikitext, NamuMark, GFM, and HTML converter)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/librewiki/rWikiText.git",
+    "directory": "bindings/node"
+  },
+  "homepage": "https://github.com/librewiki/rWikiText#readme",
+  "bugs": {
+    "url": "https://github.com/librewiki/rWikiText/issues"
+  },
+  "keywords": [
+    "wikitext",
+    "mediawiki",
+    "namumark",
+    "gfm",
+    "markdown",
+    "html",
+    "converter",
+    "napi-rs"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">= 18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "napi": {
+    "name": "rwikitext",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ]
+    }
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "create-npm-dir": "napi create-npm-dir -t .",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node example.js",
+    "version": "napi version"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  }
+}
