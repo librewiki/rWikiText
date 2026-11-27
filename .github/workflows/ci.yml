@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup PHP for Parsoid compatibility tests
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: dom, intl, mbstring
+          coverage: none
+
+      - name: Cache pinned MediaWiki archive
+        uses: actions/cache@v4
+        with:
+          path: target/upstream/mediawiki-1.46.2.tar.gz
+          key: mediawiki-1.46.2-8f7f937f8bbc1acd4cef1c5362a95f248dcd242020f2588798eb2f73ac2e69ba
+
+      - name: Fetch and verify pinned MediaWiki archive
+        run: python3 scripts/fetch-compatibility.py
+
+      - name: Check all Cargo targets
+        run: cargo check --locked --all-targets
+
+      - name: Run full integration test suite
+        run: cargo test --locked -- --include-ignored
+
+  bindings-tests:
+    name: Native Bindings Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: none
+
+      - name: Build native library
+        run: cargo build --locked --release --lib
+
+      - name: Test C binding
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/convert.c \
+            target/release/librwikitext.a -ldl -lpthread -lm -o target/convert-c
+          ./target/convert-c
+
+      - name: Test Python binding
+        run: python3 bindings/python/example.py "$PWD/target/release/librwikitext.so"
+
+      - name: Test Go binding
+        working-directory: bindings/go
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test -v ./...
+          go run ./example
+
+      - name: Test Java (JNI) binding
+        run: |
+          mkdir -p target/java
+          cc -shared -fPIC -Iinclude -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+            bindings/java/native/rwikitext_jni.c -Ltarget/release -lrwikitext \
+            -Wl,-rpath,'$ORIGIN' -o target/java/librwikitext_jni.so
+          cp target/release/librwikitext.so target/java/
+          javac -encoding UTF-8 -d target/java \
+            bindings/java/src/org/librewiki/rwikitext/WikiText.java \
+            bindings/java/Example.java
+          java -Djava.library.path=target/java -cp target/java Example
+
+      - name: Test Node.js binding
+        run: |
+          NODE_INCLUDE="$(dirname "$(dirname "$(command -v node)")")/include/node"
+          cc -std=c11 -O2 -fPIC -shared -I"$NODE_INCLUDE" bindings/node/addon.c -ldl -o bindings/node/rwikitext.node
+          node bindings/node/example.js "$PWD/target/release/librwikitext.so"
+
+      - name: Test PHP extension binding
+        working-directory: bindings/php
+        run: |
+          phpize
+          ./configure --with-rwikitext="$(cd ../.. && pwd)"
+          make -j"$(nproc)"
+          php -n -d extension="$PWD/modules/rwikitext.so" example.php
