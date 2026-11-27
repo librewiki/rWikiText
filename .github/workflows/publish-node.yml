@@ -1,0 +1,261 @@
+name: Publish Node.js (npm)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: false
+        default: "main"
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            platform: linux-x64-gnu
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: "2.17"
+            musl: false
+            ext: so
+            lib_prefix: lib
+            test: true
+          - target: aarch64-unknown-linux-gnu
+            platform: linux-arm64-gnu
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: "2.17"
+            musl: false
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: x86_64-unknown-linux-musl
+            platform: linux-x64-musl
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: ""
+            musl: true
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: aarch64-unknown-linux-musl
+            platform: linux-arm64-musl
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: ""
+            musl: true
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: x86_64-apple-darwin
+            platform: darwin-x64
+            os: macos-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            ext: dylib
+            lib_prefix: lib
+            test: false
+          - target: aarch64-apple-darwin
+            platform: darwin-arm64
+            os: macos-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            ext: dylib
+            lib_prefix: lib
+            test: true
+          - target: x86_64-pc-windows-msvc
+            platform: win32-x64-msvc
+            os: windows-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            ext: dll
+            lib_prefix: ""
+            test: true
+          - target: aarch64-pc-windows-msvc
+            platform: win32-arm64-msvc
+            os: windows-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            ext: dll
+            lib_prefix: ""
+            test: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/node
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+
+      - name: Install Zig
+        if: matrix.use_zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.13.0"
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zig
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Build native addon (cargo-zigbuild)
+        if: matrix.use_zig
+        working-directory: bindings/node
+        shell: bash
+        run: |
+          TARGET="${{ matrix.target }}"
+          if [ -n "${{ matrix.abi_suffix }}" ]; then
+            TARGET="${TARGET}.${{ matrix.abi_suffix }}"
+          fi
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            export RUSTFLAGS="-C target-feature=-crt-static"
+          fi
+          cargo zigbuild --locked --release --target "$TARGET"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}rwikitext_node.${{ matrix.ext }}" \
+            "rwikitext.${{ matrix.platform }}.node"
+
+      - name: Build native addon (cargo)
+        if: ${{ !matrix.use_zig }}
+        working-directory: bindings/node
+        shell: bash
+        run: |
+          cargo build --locked --release --target "${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}rwikitext_node.${{ matrix.ext }}" \
+            "rwikitext.${{ matrix.platform }}.node"
+
+      - name: Smoke test native addon
+        if: matrix.test
+        working-directory: bindings/node
+        shell: bash
+        run: npm test
+
+      - name: Upload native addon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.platform }}
+          path: bindings/node/rwikitext.${{ matrix.platform }}.node
+          if-no-files-found: error
+
+  publish:
+    name: Publish packages to npm
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+
+      - name: Upgrade npm for Trusted Publishing (OIDC)
+        run: npm install -g npm@latest
+
+      - name: Install Node binding dependencies
+        working-directory: bindings/node
+        run: npm ci
+
+      - name: Download built native addons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: bindings/node/artifacts
+          merge-multiple: false
+
+      - name: Assemble platform npm packages
+        working-directory: bindings/node
+        run: |
+          npm run create-npm-dir
+          npm run artifacts
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const pkgPath = "package.json";
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            const optDeps = {};
+            for (const dir of fs.readdirSync("npm").sort()) {
+              const p = JSON.parse(fs.readFileSync(path.join("npm", dir, "package.json"), "utf8"));
+              optDeps[p.name] = p.version;
+            }
+            pkg.optionalDependencies = optDeps;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      - name: Publish platform packages and main package
+        working-directory: bindings/node
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          fi
+
+          publish_if_missing() {
+            local dir="$1"
+            local extra_flags="${2:-}"
+            local name version
+            name="$(node -p "require('./$dir/package.json').name")"
+            version="$(node -p "require('./$dir/package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published on npm; skipping."
+            else
+              if ! (cd "$dir" && npm publish --provenance --access public $extra_flags); then
+                echo "::warning::npm publish failed for ${name}@${version} (e.g. version conflict or auth issue); continuing."
+              fi
+            fi
+          }
+
+          for dir in npm/*; do
+            publish_if_missing "$dir"
+          done
+
+          publish_if_missing "." "--ignore-scripts"

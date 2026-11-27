@@ -1,1 +1,6 @@
-rwikitext.node
+node_modules
+target
+npm
+*.node
+artifacts
+*.tgz

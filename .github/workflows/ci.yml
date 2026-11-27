@@ -123,10 +123,11 @@ jobs:
           java -Djava.library.path=target/java -cp target/java Example
 
       - name: Test Node.js binding
+        working-directory: bindings/node
         run: |
-          NODE_INCLUDE="$(dirname "$(dirname "$(command -v node)")")/include/node"
-          cc -std=c11 -O2 -fPIC -shared -I"$NODE_INCLUDE" bindings/node/addon.c -ldl -o bindings/node/rwikitext.node
-          node bindings/node/example.js "$PWD/target/release/librwikitext.so"
+          npm ci
+          npm run build:debug
+          npm test
 
       - name: Test PHP extension binding
         working-directory: bindings/php
