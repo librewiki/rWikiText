@@ -517,7 +517,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rwikitext"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "comrak",
  "html-escape",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "rwikitext-node"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "napi",
  "napi-build",
