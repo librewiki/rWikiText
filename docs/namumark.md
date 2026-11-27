@@ -1,5 +1,7 @@
 # NamuMark conversion contract
 
+> **Status: Alpha.** NamuMark support in rWikiText `v1.0.0` is in the alpha stage. It implements a deliberately small first-release profile verified against hand-reviewed snapshot expectations; live NamuWiki renderer compatibility and excluded constructs (such as tables, footnotes, media, includes, and other macros) remain future work.
+
 Baseline v1 was fixed before implementation for [#47](https://github.com/librewiki/rWikiText/issues/47). It adds six directions: NamuMark ↔ MediaWiki wikitext, NamuMark ↔ GFM, NamuMark ↔ HTML. Existing four directions remain supported; identity and direct GFM ↔ HTML conversions remain unsupported. Preserve existing identifiers and ABI values.
 
 ## Reference and independent expectations

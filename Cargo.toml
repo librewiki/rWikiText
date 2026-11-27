@@ -1,8 +1,23 @@
 [package]
 name = "rwikitext"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
+description = "Convert documents between MediaWiki wikitext, NamuMark (alpha), GFM, and HTML with page metadata and conversion-loss diagnostics"
+readme = "README.md"
+repository = "https://github.com/librewiki/rWikiText"
+documentation = "https://docs.rs/rwikitext"
+homepage = "https://rwikitext.librewiki.net"
+keywords = ["mediawiki", "wikitext", "namumark", "markdown", "html"]
+categories = ["text-processing", "parsing", "command-line-utilities"]
+exclude = [
+    "AGENTS.md",
+    "docs/",
+    "bindings/",
+    "examples/",
+    "scripts/",
+    "release-artifacts/",
+]
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]

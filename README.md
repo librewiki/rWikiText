@@ -6,7 +6,7 @@ rWikiText는 MediaWiki 위키텍스트, 나무마크(NamuMark), GitHub Flavored 
 
 위키 문서를 Markdown이나 HTML 작업 흐름으로 옮기거나 외부 문서를 위키로 들여올 때, 또는 애플리케이션 안에 변환 기능을 직접 넣을 때 쓴다. 변환을 실행하면 결과 본문과 구조화된 페이지 메타데이터, 그리고 원본 입력의 바이트 범위로 변환 손실 위치를 짚어 주는 진단 정보를 돌려준다.
 
-나무마크는 첫 릴리스에서 의도적으로 작은 변환 범위만 다루며 지원하지 않는 문법은 위치가 포함된 진단으로 알린다. 문법 기준 문서와 수작업으로 검수한 독립 픽스처는 고정해 두었지만 실제 나무위키 렌더러와의 호환성은 아직 검증하지 않았다. 자세한 범위와 제외 항목은 [나무마크 계약 및 제외 범위](docs/namumark.md)와 [후보 검증 현황](docs/compatibility.md#namumark-candidate-verification)에 정리되어 있다.
+나무마크(NamuMark) 지원은 **알파(alpha) 단계**다. 첫 릴리스에서 의도적으로 작은 변환 범위만 다루며 지원하지 않는 문법은 위치가 포함된 진단으로 알린다. 문법 기준 문서와 수작업으로 검수한 독립 픽스처는 고정해 두었지만 실제 나무위키 렌더러와의 호환성은 아직 검증하지 않았다. 자세한 범위와 제외 항목은 [나무마크 계약 및 제외 범위](docs/namumark.md)와 [후보 검증 현황](docs/compatibility.md#namumark-candidate-verification)에 정리되어 있다.
 
 ## 빠른 시작
 
@@ -108,7 +108,7 @@ cargo run --locked -- serve [--port PORT] [--bind ADDR]
 
 버전 1 C ABI를 통해 C, Python, PHP, Java, Kotlin/Native, Node.js, Go에서 같은 변환 코어를 호출할 수 있다. 첫 릴리스 검증 매트릭스는 Linux x86-64와 ARM64의 glibc 및 musl 환경을 대상으로 한다. 그중 Kotlin/Native는 glibc만 대상이다. Go 바인딩에는 별도의 빌드·검증 안내가 있다. [네이티브 바인딩 빌드 및 콜백 예제](docs/native-bindings.md) · [대상 매트릭스](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md) · [Go 바인딩](bindings/go/README.md)
 
-첫 공개 릴리스와 두 Linux 런타임 점검은 아직 진행 예정이다. [glibc 검증](https://github.com/librewiki/rWikiText/issues/26) · [musl 검증](https://github.com/librewiki/rWikiText/issues/27) · [첫 공개 릴리스](https://github.com/librewiki/rWikiText/issues/28)
+`v1.0.0` 릴리스에서 Linux glibc(14/14) 및 musl(12/12) 런타임 검증을 마쳤으며, 언어·플랫폼별 바이너리 묶음은 [GitHub Releases](https://github.com/librewiki/rWikiText/releases/tag/v1.0.0)에서 받을 수 있다. [glibc 검증](https://github.com/librewiki/rWikiText/issues/26) · [musl 검증](https://github.com/librewiki/rWikiText/issues/27) · [첫 공개 릴리스](https://github.com/librewiki/rWikiText/issues/28)
 
 ## 개발 및 테스트
 
@@ -137,7 +137,7 @@ rWikiText is a Rust library and command-line tool for converting documents betwe
 
 Use it to move wiki documents into Markdown or HTML workflows, import documents into a wiki, or embed conversion in an application. The library returns converted content, structured page metadata, and diagnostics that identify conversion losses by byte range in the original input.
 
-NamuMark (나무마크) has a deliberately small first-release conversion profile with located diagnostics for unsupported syntax. Its syntax reference and independent hand-reviewed fixtures are pinned; live NamuWiki renderer compatibility remains unverified. See the [NamuMark contract and exclusions](docs/namumark.md) and [candidate verification](docs/compatibility.md#namumark-candidate-verification).
+NamuMark (나무마크) support is currently **alpha**. It has a deliberately small first-release conversion profile with located diagnostics for unsupported syntax. Its syntax reference and independent hand-reviewed fixtures are pinned; live NamuWiki renderer compatibility remains unverified. See the [NamuMark contract and exclusions](docs/namumark.md) and [candidate verification](docs/compatibility.md#namumark-candidate-verification).
 
 ### Quick start
 
@@ -239,7 +239,7 @@ The web UI provides source and target format selectors, a `Strict` toggle, and s
 
 The version 1 C ABI exposes the same conversion core to C, Python, PHP, Java, Kotlin/Native, Node.js, and Go. The first-release verification matrix targets Linux x86-64 and ARM64 with glibc or musl. Kotlin/Native targets glibc in that matrix. The Go binding has its own build and verification instructions. [Native binding build and callback examples](docs/native-bindings.md) · [Target matrix](docs/adr/0002-versioned-c-abi-and-wiki-data-callbacks.md) · [Go binding](bindings/go/README.md)
 
-The first public release and both Linux runtime checks are planned. [glibc verification](https://github.com/librewiki/rWikiText/issues/26) · [musl verification](https://github.com/librewiki/rWikiText/issues/27) · [First public release](https://github.com/librewiki/rWikiText/issues/28)
+`v1.0.0` passed both Linux glibc (14/14) and musl (12/12) runtime verification matrices; prebuilt per-language and per-platform archives are published on [GitHub Releases](https://github.com/librewiki/rWikiText/releases/tag/v1.0.0). [glibc verification](https://github.com/librewiki/rWikiText/issues/26) · [musl verification](https://github.com/librewiki/rWikiText/issues/27) · [First public release](https://github.com/librewiki/rWikiText/issues/28)
 
 ### Development and testing
 
