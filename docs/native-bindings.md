@@ -1,6 +1,8 @@
 # Native bindings
 
-The version 1 C ABI calls the same document conversion implementation as the Rust library and CLI. It uses UTF-8 JSON for requests and responses to give every binding the same field names and diagnostic representation.
+C, Python, PHP, Java, Kotlin/Native, and Go call the same document conversion implementation as the Rust library and CLI through the version 1 C ABI. It uses UTF-8 JSON for requests and responses to give every binding the same field names and diagnostic representation.
+
+The Node.js binding (`@librewiki/rwikitext`) uses [`napi-rs`](https://napi.rs/) to compile the Rust converter directly into a native `.node` addon without loading a separate `librwikitext` shared library, while preserving the same request, response, and synchronous lookup callback schema (plus `convertAsync` and TypeScript definitions).
 
 ## Build and run
 
@@ -19,7 +21,7 @@ On Linux with musl, build with a matching musl Rust toolchain and C compiler. Us
 - [PHP](../bindings/php/README.md)
 - [Java](../bindings/java/README.md)
 - [Kotlin/Native](../bindings/kotlin-native/README.md)
-- [Node.js](../bindings/node/README.md)
+- [Node.js (`@librewiki/rwikitext`, `napi-rs`)](../bindings/node/README.md)
 - [Go](../bindings/go/README.md)
 
 ## Conversion request

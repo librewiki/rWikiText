@@ -70,17 +70,14 @@ npm test
 
 ## Publishing to npm
 
-1. Sync versions in `bindings/node/Cargo.toml` and `bindings/node/package.json`.
-2. Generate platform package directories:
-   ```sh
-   npm run create-npm-dir
-   ```
-3. Build `.node` binaries for each target in `package.json` (`napi.triples.additional`), place them in `artifacts/`, and copy them into `npm/<target>/`:
-   ```sh
-   npm run artifacts
-   ```
-4. Publish platform packages and the main package (requires `npm login` and access to the `@librewiki` scope):
-   ```sh
-   npx napi prepublish -t npm --skip-gh-release
-   npm publish --access public
-   ```
+Automated publishing runs in GitHub Actions via [`.github/workflows/release.yml`](../../.github/workflows/release.yml) and [`.github/workflows/publish-node.yml`](../../.github/workflows/publish-node.yml) when a `release/*` pull request is merged into `main` (or when triggered manually with `workflow_dispatch`).
+
+1. Sync versions in `bindings/node/Cargo.toml` and `bindings/node/package.json` on the release branch.
+2. Merge the `release/*` pull request into `main`. CI cross-compiles all 8 platform targets (`linux-x64-gnu`, `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`, `darwin-x64`, `darwin-arm64`, `win32-x64-msvc`, `win32-arm64-msvc`), assembles `optionalDependencies`, and publishes each package via npm Trusted Publishing (OIDC) using `npm stage publish --provenance --access public`.
+
+To assemble platform package directories locally for inspection:
+
+```sh
+npm run create-npm-dir
+npm run artifacts
+```
