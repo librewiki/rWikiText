@@ -1,41 +1,73 @@
 use super::{
     emphasis::{apostrophe_run, parse_emphasis},
-    links::{changes_wiki_title, parse_link},
+    links::changes_wiki_title,
     scan::{find_unescaped, unescape},
 };
-use crate::{inline, metadata, Diagnostic, Format, Inline, PageMetadata, WikiContext};
+use crate::{
+    inline, metadata, Block, Diagnostic, Document, Format, Inline, PageMetadata, WikiContext,
+};
+use std::ops::Range;
 
-pub(super) struct InlineParser<'a, 'ctx> {
-    pub(super) context: &'a WikiContext<'ctx>,
-    pub(super) target: Format,
-    pub(super) diagnostics: &'a mut Vec<Diagnostic>,
-    pub(super) metadata: &'a mut PageMetadata,
-}
-
-pub(super) fn parse_inlines(
-    input: &str,
-    base: usize,
-    context: &WikiContext<'_>,
+pub(super) struct NamuMarkParser<'a, 'ctx> {
+    context: &'a WikiContext<'ctx>,
     target: Format,
-    diagnostics: &mut Vec<Diagnostic>,
-    metadata: &mut PageMetadata,
-) -> Vec<Inline> {
-    InlineParser {
-        context,
-        target,
-        diagnostics,
-        metadata,
-    }
-    .parse(input, base, 0)
+    diagnostics: &'a mut Vec<Diagnostic>,
+    metadata: PageMetadata,
 }
 
-impl InlineParser<'_, '_> {
+impl<'a, 'ctx> NamuMarkParser<'a, 'ctx> {
+    pub(super) fn new(
+        context: &'a WikiContext<'ctx>,
+        target: Format,
+        diagnostics: &'a mut Vec<Diagnostic>,
+    ) -> Self {
+        Self {
+            context,
+            target,
+            diagnostics,
+            metadata: PageMetadata::default(),
+        }
+    }
+
+    pub(super) fn page_title(&self) -> &'ctx str {
+        self.context.page_title
+    }
+
+    pub(super) fn target(&self) -> Format {
+        self.target
+    }
+
+    pub(super) fn push_loss(&mut self, span: Range<usize>, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic::loss(span, message));
+    }
+
+    pub(super) fn has_redirect(&self) -> bool {
+        self.metadata.redirect_target.is_some()
+    }
+
+    pub(super) fn set_redirect(&mut self, title: String) {
+        self.metadata.redirect_target = Some(title);
+    }
+
+    pub(super) fn finish(self, blocks: Vec<Block>, input_len: usize) -> (Document, PageMetadata) {
+        if self.metadata.redirect_target.is_some()
+            && (!blocks.is_empty() || !self.metadata.categories.is_empty())
+        {
+            self.diagnostics.push(Diagnostic::loss(
+                0..input_len,
+                "redirect with additional document content",
+            ));
+        }
+        (Document { blocks }, self.metadata)
+    }
+
+    pub(super) fn parse_line(&mut self, input: &str, base: usize) -> Vec<Inline> {
+        self.parse(input, base, 0)
+    }
+
     pub(super) fn parse(&mut self, input: &str, base: usize, depth: usize) -> Vec<Inline> {
         if depth > 32 {
-            self.diagnostics.push(Diagnostic::loss(
-                base..base + input.len(),
-                "NamuMark nesting limit",
-            ));
+            self.push_loss(base..base + input.len(), "NamuMark nesting limit");
             return vec![Inline::Text(input.into())];
         }
         let mut out = Vec::new();
@@ -69,10 +101,10 @@ impl InlineParser<'_, '_> {
                     }
                 }
                 let end = end.map_or(rest.len(), |n| n + 3);
-                self.diagnostics.push(Diagnostic::loss(
+                self.push_loss(
                     base + i..base + i + end,
                     "unsupported or malformed NamuMark literal directive",
-                ));
+                );
                 inline::text(&mut out, &rest[..end]);
                 i += end;
                 continue;
@@ -89,10 +121,10 @@ impl InlineParser<'_, '_> {
                         if self.target == Format::Wikitext
                             && (!metadata::valid_title(&name) || changes_wiki_title(&name))
                         {
-                            self.diagnostics.push(Diagnostic::loss(
+                            self.push_loss(
                                 base + i..base + i + full,
                                 "MediaWiki cannot preserve this category title",
-                            ));
+                            );
                         }
                         if self.target == Format::Html
                             && (!metadata::valid_title(&name)
@@ -100,33 +132,30 @@ impl InlineParser<'_, '_> {
                                     .as_deref()
                                     .is_some_and(|s| !metadata::valid_sort_key(s)))
                         {
-                            self.diagnostics.push(Diagnostic::loss(
+                            self.push_loss(
                                 base + i..base + i + full,
                                 "HTML metadata transport cannot preserve this category",
-                            ));
+                            );
                         }
                         self.metadata.categories.push(name);
                         self.metadata.category_sort_keys.push(sort);
                         if self.target == Format::Gfm {
-                            self.diagnostics.push(Diagnostic::loss(
+                            self.push_loss(
                                 base + i..base + i + full,
                                 "saving the GFM body alone loses the category",
-                            ));
+                            );
                         }
                         i += full;
                         continue;
                     }
-                    self.diagnostics.push(Diagnostic::loss(
-                        base + i..base + i + full,
-                        "unsupported NamuMark category",
-                    ));
+                    self.push_loss(base + i..base + i + full, "unsupported NamuMark category");
                     inline::text(&mut out, &rest[..full]);
                     i += full;
                     continue;
                 }
             }
             if rest.starts_with("[[") {
-                match parse_link(self, rest, base + i, depth, &mut out) {
+                match self.parse_link(rest, base + i, depth, &mut out) {
                     Some(consumed) => {
                         i += consumed;
                         continue;
@@ -141,10 +170,10 @@ impl InlineParser<'_, '_> {
                         i += consumed;
                     }
                     Err(()) => {
-                        self.diagnostics.push(Diagnostic::loss(
+                        self.push_loss(
                             base + i..base + input.len(),
                             "unclosed NamuMark emphasis",
-                        ));
+                        );
                         inline::text(&mut out, rest);
                         break;
                     }
@@ -156,10 +185,7 @@ impl InlineParser<'_, '_> {
                 .find(|marker| rest.starts_with(marker) && rest[marker.len()..].contains(marker));
             if let Some(marker) = excluded {
                 let end = marker.len() + rest[marker.len()..].find(marker).unwrap() + marker.len();
-                self.diagnostics.push(Diagnostic::loss(
-                    base + i..base + i + end,
-                    "unsupported NamuMark formatting",
-                ));
+                self.push_loss(base + i..base + i + end, "unsupported NamuMark formatting");
                 inline::text(&mut out, &rest[..end]);
                 i += end;
                 continue;
@@ -169,10 +195,10 @@ impl InlineParser<'_, '_> {
                     let inner = &rest[1..1 + offset];
                     if is_namumark_footnote(inner) || is_namumark_macro(inner) {
                         let end = offset + 2;
-                        self.diagnostics.push(Diagnostic::loss(
+                        self.push_loss(
                             base + i..base + i + end,
                             "unsupported NamuMark macro or footnote",
-                        ));
+                        );
                         inline::text(&mut out, &rest[..end]);
                         i += end;
                         continue;
