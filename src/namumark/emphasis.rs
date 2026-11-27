@@ -40,39 +40,38 @@ pub(super) fn parse_emphasis(
     // symmetric closer; otherwise prefer the first 5+ run so nested
     // short markers (`''`, `'''`) stay in the body.
     let body_start = opener;
-    let (closer_offset, closer_run) = match find_run_at_least(&input[body_start..], 5) {
-        Some((sym_offset, sym_run)) => {
-            find_asymmetric_closer_pair(&input[body_start..body_start + sym_offset])
-                .unwrap_or((sym_offset, sym_run))
+    let closer = match find_run_at_least(&input[body_start..], 5) {
+        Some((sym_offset, _)) => {
+            find_asymmetric_closer_pair(&input[body_start..body_start + sym_offset], body_start)
+                .unwrap_or(CombinedCloser::Symmetric {
+                    body_end: body_start + sym_offset,
+                })
         }
-        None => find_run_at_least(&input[body_start..], 2).ok_or(())?,
+        None => {
+            let (offset, run) = find_run_at_least(&input[body_start..], 2).ok_or(())?;
+            asymmetric_closer(&input[body_start..], body_start, offset, run).ok_or(())?
+        }
     };
-    let body_end = body_start + closer_offset;
-    let (node, consumed) = if closer_run >= 5 {
-        // Symmetric combined form: italic outside bold.
-        let children = parser.parse(&input[body_start..body_end], base + body_start, depth + 2);
-        let node = Inline::Emphasis {
-            strong: false,
-            children: vec![Inline::Emphasis {
-                strong: true,
-                children,
-            }],
-        };
-        // Extra closer-run apostrophes are re-lexed by the caller.
-        (node, body_start + closer_offset + 5)
-    } else {
-        // A two-apostrophe closer closes italic first so bold wraps the
-        // remainder; a three- or four-apostrophe closer closes bold first so
-        // italic wraps the remainder.
-        parse_asymmetric(
-            parser,
-            input,
-            base,
-            depth,
-            body_start,
-            body_end,
-            closer_run != 2,
-        )?
+    let (node, consumed) = match closer {
+        CombinedCloser::Symmetric { body_end } => {
+            // Symmetric combined form: italic outside bold.
+            let children = parser.parse(&input[body_start..body_end], base + body_start, depth + 2);
+            let node = Inline::Emphasis {
+                strong: false,
+                children: vec![Inline::Emphasis {
+                    strong: true,
+                    children,
+                }],
+            };
+            // Extra closer-run apostrophes are re-lexed by the caller.
+            (node, body_end + 5)
+        }
+        CombinedCloser::Asymmetric(span) => {
+            // A two-apostrophe closer closes italic first so bold wraps the
+            // remainder; a three- or four-apostrophe closer closes bold first so
+            // italic wraps the remainder.
+            parse_asymmetric(parser, input, base, depth, body_start, span)
+        }
     };
     let mut nodes = Vec::new();
     // Any opener apostrophes beyond the combined marker stay literal.
@@ -123,57 +122,96 @@ fn parse_single_style(
     Ok((vec![node], consumed))
 }
 
-/// Parse an asymmetric combined emphasis span where one style closes at
-/// `body_end` and the other style wraps the remainder until its own closer.
+struct AsymmetricSpan {
+    body_end: usize,
+    tail_start: usize,
+    tail_end: usize,
+    inner_strong: bool,
+}
+
+enum CombinedCloser {
+    Symmetric { body_end: usize },
+    Asymmetric(AsymmetricSpan),
+}
+
+/// Parse an asymmetric combined emphasis span using the pre-located inner and
+/// outer closer offsets in `span`.
 fn parse_asymmetric(
     parser: &mut InlineParser<'_, '_>,
     input: &str,
     base: usize,
     depth: usize,
     body_start: usize,
-    body_end: usize,
-    inner_strong: bool,
-) -> Result<(Inline, usize), ()> {
-    let (inner_close_len, outer_close_len) = if inner_strong { (3, 2) } else { (2, 3) };
-    let tail_start = body_end + inner_close_len;
-    let tail_offset = if inner_strong {
-        find_exact_run(&input[tail_start..], 2)
-    } else {
-        find_run_at_least(&input[tail_start..], 3).map(|(offset, _)| offset)
-    }
-    .ok_or(())?;
-    let tail_end = tail_start + tail_offset;
-    let inner = parser.parse(&input[body_start..body_end], base + body_start, depth + 2);
-    let tail = parser.parse(&input[tail_start..tail_end], base + tail_start, depth + 1);
+    span: AsymmetricSpan,
+) -> (Inline, usize) {
+    let outer_close_len = if span.inner_strong { 2 } else { 3 };
+    let inner = parser.parse(
+        &input[body_start..span.body_end],
+        base + body_start,
+        depth + 2,
+    );
+    let tail = parser.parse(
+        &input[span.tail_start..span.tail_end],
+        base + span.tail_start,
+        depth + 1,
+    );
     let mut children = vec![Inline::Emphasis {
-        strong: inner_strong,
+        strong: span.inner_strong,
         children: inner,
     }];
     children.extend(tail);
     let node = Inline::Emphasis {
-        strong: !inner_strong,
+        strong: !span.inner_strong,
         children,
     };
-    Ok((node, tail_end + outer_close_len))
+    (node, span.tail_end + outer_close_len)
+}
+
+/// Locate the outer closer in `tail` after an asymmetric inner closer: when
+/// bold closed first (`inner_strong == true`) the outer italic closer is an
+/// exact `''` run; otherwise the outer bold closer is a `'''`+ run.
+fn find_outer_closer(tail: &str, inner_strong: bool) -> Option<usize> {
+    if inner_strong {
+        find_exact_run(tail, 2)
+    } else {
+        find_run_at_least(tail, 3).map(|(offset, _)| offset)
+    }
+}
+
+/// Resolve an asymmetric closer pair starting from a first closer `(offset, run)`
+/// within `slice` (which begins at `body_start` in the outer emphasis input).
+fn asymmetric_closer(
+    slice: &str,
+    body_start: usize,
+    offset: usize,
+    run: usize,
+) -> Option<CombinedCloser> {
+    let inner_strong = match run {
+        2 => false,
+        3 | 4 => true,
+        _ => return None,
+    };
+    let inner_close_len = if inner_strong { 3 } else { 2 };
+    let tail_offset = find_outer_closer(&slice[offset + inner_close_len..], inner_strong)?;
+    let body_end = body_start + offset;
+    let tail_start = body_end + inner_close_len;
+    Some(CombinedCloser::Asymmetric(AsymmetricSpan {
+        body_end,
+        tail_start,
+        tail_end: tail_start + tail_offset,
+        inner_strong,
+    }))
 }
 
 /// Locate an asymmetric closer pair (`'''`/`''''` then `''`, or `''` then
 /// `'''`+) within `before_sym` when both short-marker parities are odd,
 /// indicating the opening 5+ run closes asymmetrically before a later 5+ run.
-fn find_asymmetric_closer_pair(before_sym: &str) -> Option<(usize, usize)> {
+fn find_asymmetric_closer_pair(before_sym: &str, body_start: usize) -> Option<CombinedCloser> {
     if !(odd_emphasis_runs(before_sym, 2) && odd_emphasis_runs(before_sym, 3)) {
         return None;
     }
     let (offset, run) = find_run_at_least(before_sym, 2)?;
-    if run == 2 {
-        find_run_at_least(&before_sym[offset + 2..], 3)?;
-        Some((offset, run))
-    } else if run == 3 || run == 4 {
-        find_exact_run(&before_sym[offset + 3..], 2)?;
-        Some((offset, run))
-    } else {
-        None
-    }
+    asymmetric_closer(before_sym, body_start, offset, run)
 }
 
 /// Number of leading apostrophes in `input`.

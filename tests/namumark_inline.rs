@@ -1,3 +1,7 @@
+#[path = "support/namumark.rs"]
+mod namumark_support;
+
+use namumark_support::{assert_clean_namumark, convert_clean_namumark};
 use rwikitext::{convert, ConversionRequest, Format, WikiContext};
 
 fn namumark_convert(target: Format, input: &str) -> rwikitext::ConversionResult {
@@ -13,7 +17,6 @@ fn namumark_convert(target: Format, input: &str) -> rwikitext::ConversionResult 
 
 #[test]
 fn namumark_combined_emphasis_closes_in_closer_order() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         ("'''''x''' y''", Format::Html, "<p><em><strong>x</strong> y</em></p>"),
@@ -24,23 +27,7 @@ fn namumark_combined_emphasis_closes_in_closer_order() {
         ("'''''x'' y'''", Format::Gfm, "***x* y**"),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 
@@ -57,25 +44,12 @@ fn namumark_issue_examples_convert_without_diagnostics() {
             "<p><strong><em>bold-italic</em> bold</strong></p>",
         ),
     ] {
-        let result = convert(ConversionRequest {
-            source: Format::NamuMark,
-            target: Format::Html,
-            input,
-            context: &context,
-        })
-        .unwrap();
-        assert_eq!(result.content, expected, "input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "input {input}: {:?}",
-            result.diagnostics
-        );
+        assert_clean_namumark(&context, Format::Html, input, expected);
     }
 }
 
 #[test]
 fn namumark_nests_emphasis_inside_single_markers() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         (
@@ -94,29 +68,12 @@ fn namumark_nests_emphasis_inside_single_markers() {
         ("''x '''y''' z''", Format::Gfm, "*x **y** z*"),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 
 #[test]
 fn namumark_symmetric_combined_emphasis_is_italic_outside_bold() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         ("'''''x'''''", Format::Html, "<p><em><strong>x</strong></em></p>"),
@@ -124,25 +81,12 @@ fn namumark_symmetric_combined_emphasis_is_italic_outside_bold() {
         ("'''''x'''''", Format::Gfm, "***x***"),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 
 #[test]
 fn namumark_symmetric_combined_emphasis_keeps_nested_short_markers() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         (
@@ -176,30 +120,13 @@ fn namumark_symmetric_combined_emphasis_keeps_nested_short_markers() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 }
 
 #[test]
 fn namumark_combined_emphasis_falls_back_without_symmetric_closer() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         (
@@ -221,30 +148,13 @@ fn namumark_combined_emphasis_falls_back_without_symmetric_closer() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 }
 
 #[test]
 fn namumark_same_line_asymmetric_and_symmetric_combined_emphasis() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         (
@@ -278,23 +188,7 @@ fn namumark_same_line_asymmetric_and_symmetric_combined_emphasis() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 }
@@ -347,23 +241,17 @@ fn namumark_escaped_apostrophes_stay_literal() {
 
 #[test]
 fn namumark_escaped_apostrophe_inside_emphasis_body() {
-    use rwikitext::{convert_with_mode, ConversionMode};
-    let result = namumark_convert(Format::Html, r"''x \'' y''");
-    assert_eq!(result.content, "<p><em>x '' y</em></p>");
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     let context = WikiContext::default();
-    let request = ConversionRequest {
-        source: Format::NamuMark,
-        target: Format::Html,
-        input: r"''x \'' y''",
-        context: &context,
-    };
-    assert!(convert_with_mode(request, ConversionMode::Strict).is_ok());
+    assert_clean_namumark(
+        &context,
+        Format::Html,
+        r"''x \'' y''",
+        "<p><em>x '' y</em></p>",
+    );
 }
 
 #[test]
 fn namumark_ordinary_brackets_remain_literal_text() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     for input in [
         "[1]",
@@ -377,38 +265,16 @@ fn namumark_ordinary_brackets_remain_literal_text() {
         "[br(1]",
     ] {
         for target in [Format::Html, Format::Wikitext, Format::Gfm] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            convert_clean_namumark(&context, target, input);
         }
     }
-    let wikitext = namumark_convert(Format::Wikitext, "[1]");
-    assert_eq!(wikitext.content, "&#91;1&#93;");
-    assert!(wikitext.diagnostics.is_empty());
-    let gfm = namumark_convert(Format::Gfm, "[1]");
-    assert_eq!(gfm.content, "\\[1\\]");
-    assert!(gfm.diagnostics.is_empty());
-    let html = namumark_convert(Format::Html, "[1]");
-    assert_eq!(html.content, "<p>[1]</p>");
-    assert!(html.diagnostics.is_empty());
+    assert_clean_namumark(&context, Format::Wikitext, "[1]", "&#91;1&#93;");
+    assert_clean_namumark(&context, Format::Gfm, "[1]", "\\[1\\]");
+    assert_clean_namumark(&context, Format::Html, "[1]", "<p>[1]</p>");
 }
 
 #[test]
 fn namumark_bracketed_prose_keeps_inner_emphasis_active() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         ("[note ''x'']", Format::Html, "<p>[note <em>x</em>]</p>"),
@@ -416,23 +282,7 @@ fn namumark_bracketed_prose_keeps_inner_emphasis_active() {
         ("[note ''x'']", Format::Gfm, "\\[note *x*\\]"),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
     let result = namumark_convert(Format::Html, r"\[[Orchard]]");
     assert_eq!(result.content, "<p>[[Orchard]]</p>");
@@ -441,7 +291,6 @@ fn namumark_bracketed_prose_keeps_inner_emphasis_active() {
 
 #[test]
 fn namumark_italic_closer_takes_leading_two_of_five_apostrophes() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     let cases = [
         (
@@ -475,30 +324,13 @@ fn namumark_italic_closer_takes_leading_two_of_five_apostrophes() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 }
 
 #[test]
 fn namumark_shared_five_run_closes_italic_and_bold_pair() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     // A five-or-more closer run donates its leading apostrophes to the inner
     // opener, so one shared run closes both the inner and outer style.
@@ -534,23 +366,7 @@ fn namumark_shared_five_run_closes_italic_and_bold_pair() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 }
@@ -572,23 +388,7 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
             (Format::Wikitext, wikitext),
             (Format::Gfm, gfm),
         ] {
-            let request = ConversionRequest {
-                source: Format::NamuMark,
-                target,
-                input,
-                context: &context,
-            };
-            let result = convert(request).unwrap();
-            assert_eq!(result.content, expected, "target {target:?} input {input}");
-            assert!(
-                result.diagnostics.is_empty(),
-                "target {target:?} input {input}: {:?}",
-                result.diagnostics
-            );
-            assert!(
-                convert_with_mode(request, ConversionMode::Strict).is_ok(),
-                "target {target:?} input {input}"
-            );
+            assert_clean_namumark(&context, target, input, expected);
         }
     }
 
@@ -645,23 +445,7 @@ fn namumark_italic_closer_still_skips_three_and_four_apostrophes() {
         (Format::Wikitext, "'''&#39;x'''&#39;"),
         (Format::Gfm, "**\\'x**\\'"),
     ] {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 

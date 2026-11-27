@@ -1,3 +1,7 @@
+#[path = "support/namumark.rs"]
+mod namumark_support;
+
+use namumark_support::assert_clean_namumark;
 use rwikitext::{convert, ConversionRequest, Format, WikiContext};
 
 #[test]
@@ -152,7 +156,6 @@ fn mediawiki_metadata_never_activates_namumark_title_markup() {
 
 #[test]
 fn namumark_parent_relative_link_resolves_without_trailing_slash() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext { page_title: "Parent/Child", ..WikiContext::default() };
     let cases = [
         (Format::Html, "<p><a rel=\"mw:WikiLink\" href=\"./Parent\">../</a></p>"),
@@ -160,17 +163,12 @@ fn namumark_parent_relative_link_resolves_without_trailing_slash() {
         (Format::Gfm, "[\\.\\.\\/](<./Parent>)"),
     ];
     for (target, expected) in cases {
-        let request = ConversionRequest { source: Format::NamuMark, target, input: "[[../]]", context: &context };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "target {target:?}");
+        assert_clean_namumark(&context, target, "[[../]]", expected);
     }
 }
 
 #[test]
 fn namumark_parent_relative_link_with_sibling_segment_resolves() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext { page_title: "Parent/Child", ..WikiContext::default() };
     let cases = [
         (Format::Html, "<p><a rel=\"mw:WikiLink\" href=\"./Parent/Sibling\">../Sibling</a></p>"),
@@ -178,11 +176,7 @@ fn namumark_parent_relative_link_with_sibling_segment_resolves() {
         (Format::Gfm, "[\\.\\.\\/Sibling](<./Parent/Sibling>)"),
     ];
     for (target, expected) in cases {
-        let request = ConversionRequest { source: Format::NamuMark, target, input: "[[../Sibling]]", context: &context };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "target {target:?}");
+        assert_clean_namumark(&context, target, "[[../Sibling]]", expected);
     }
 }
 
@@ -249,7 +243,6 @@ fn namumark_explicit_non_automatic_fragments_remain_active() {
 
 #[test]
 fn namumark_parent_relative_fragment_resolves_without_trailing_slash() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext {
         page_title: "Parent/Child",
         ..WikiContext::default()
@@ -287,28 +280,12 @@ fn namumark_parent_relative_fragment_resolves_without_trailing_slash() {
         ),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}"
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 
 #[test]
 fn namumark_parent_relative_fragment_on_top_level_title_resolves() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext {
         page_title: "Parent",
         ..WikiContext::default()
@@ -322,19 +299,7 @@ fn namumark_parent_relative_fragment_on_top_level_title_resolves() {
         (Format::Gfm, "[\\.\\.\\/\\#fragment](<./Parent#fragment>)"),
     ];
     for (target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input: "[[../#fragment]]",
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?}"
-        );
+        assert_clean_namumark(&context, target, "[[../#fragment]]", expected);
     }
 }
 
@@ -395,7 +360,6 @@ fn namumark_parent_relative_automatic_anchor_is_excluded_before_resolution() {
 
 #[test]
 fn namumark_child_relative_fragment_resolves_without_trailing_slash() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext {
         page_title: "Parent/Child",
         ..WikiContext::default()
@@ -409,25 +373,12 @@ fn namumark_child_relative_fragment_resolves_without_trailing_slash() {
         (Format::Gfm, "[\\/\\#fragment](<./Parent/Child#fragment>)"),
     ];
     for (target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input: "[[/#fragment]]",
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?}"
-        );
+        assert_clean_namumark(&context, target, "[[/#fragment]]", expected);
     }
 }
 
 #[test]
 fn namumark_child_relative_link_without_child_resolves_to_current_page() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext {
         page_title: "Parent/Child",
         ..WikiContext::default()
@@ -441,19 +392,7 @@ fn namumark_child_relative_link_without_child_resolves_to_current_page() {
         (Format::Gfm, "[\\/](<./Parent/Child>)"),
     ];
     for (target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input: "[[/]]",
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?}");
-        assert!(result.diagnostics.is_empty(), "target {target:?}");
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?}"
-        );
+        assert_clean_namumark(&context, target, "[[/]]", expected);
     }
 }
 
@@ -484,23 +423,7 @@ fn namumark_escaped_hash_stays_literal_in_page_title() {
         ),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 
     // MediaWiki cannot represent a literal '#' in a page title without turning
@@ -550,23 +473,7 @@ fn namumark_relative_links_preserve_escaped_hash_in_page_title() {
         ),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 
     for input in [r"[[../\#note]]", r"[[/\#note]]"] {
@@ -592,7 +499,6 @@ fn namumark_relative_links_preserve_escaped_hash_in_page_title() {
 
 #[test]
 fn namumark_relative_fragment_regression_guards_stay_byte_identical() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext {
         page_title: "Parent/Child",
         ..WikiContext::default()
@@ -630,22 +536,7 @@ fn namumark_relative_fragment_regression_guards_stay_byte_identical() {
         ),
     ];
     for (input, target, expected) in cases {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "target {target:?} input {input}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "target {target:?} input {input}"
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "target {target:?} input {input}"
-        );
+        assert_clean_namumark(&context, target, input, expected);
     }
 }
 
@@ -750,7 +641,6 @@ fn namumark_list_continuation_lines_emit_loss_and_fail_strict() {
 
 #[test]
 fn namumark_basic_single_level_lists_and_separated_lists_convert_cleanly() {
-    use rwikitext::{convert_with_mode, ConversionMode};
     let context = WikiContext::default();
     for (input, expected) in [
         (" * Apricot\n * Quince", "<ul><li>Apricot</li><li>Quince</li></ul>"),
@@ -764,23 +654,7 @@ fn namumark_basic_single_level_lists_and_separated_lists_convert_cleanly() {
             "<ul><li>Apricot</li></ul>\n<p>After list</p>",
         ),
     ] {
-        let request = ConversionRequest {
-            source: Format::NamuMark,
-            target: Format::Html,
-            input,
-            context: &context,
-        };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "input {input:?}");
-        assert!(
-            result.diagnostics.is_empty(),
-            "input {input:?}: {:?}",
-            result.diagnostics
-        );
-        assert!(
-            convert_with_mode(request, ConversionMode::Strict).is_ok(),
-            "input {input:?}"
-        );
+        assert_clean_namumark(&context, Format::Html, input, expected);
     }
 }
 
