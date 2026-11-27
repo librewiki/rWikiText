@@ -1,11 +1,11 @@
 use super::{
-    inline::InlineParser,
+    inline::NamuMarkParser,
     scan::{find_unescaped, unescape},
 };
 use crate::{html_policy, inline, Format, Inline};
 use std::ops::Range;
 
-impl InlineParser<'_, '_> {
+impl NamuMarkParser<'_, '_> {
     /// Parse a `[[...]]` NamuMark link starting at `rest`, returning the number of
     /// consumed bytes or `None` when the link is unclosed and the rest of the
     /// input has been emitted as literal text.

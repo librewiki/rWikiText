@@ -1,4 +1,4 @@
-use super::{inline::InlineParser, links::changes_wiki_title};
+use super::{inline::NamuMarkParser, links::changes_wiki_title};
 use crate::{
     core, metadata, Block, Diagnostic, Document, Format, Inline, PageMetadata, WikiContext,
 };
@@ -10,7 +10,7 @@ pub(crate) fn parse(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Document, PageMetadata) {
     let mut blocks = Vec::new();
-    let mut inline_parser = InlineParser::new(context, target, diagnostics);
+    let mut parser = NamuMarkParser::new(context, target, diagnostics);
     let mut paragraph = Vec::new();
     let mut list: Vec<core::ListLine> = Vec::new();
     let mut in_list_continuation = false;
@@ -42,7 +42,7 @@ pub(crate) fn parse(
                     break;
                 }
             }
-            inline_parser.push_loss(start..end, "unsupported NamuMark directive");
+            parser.push_loss(start..end, "unsupported NamuMark directive");
             blocks.push(Block::Paragraph(vec![Inline::Text(
                 input[start..end].into(),
             )]));
@@ -71,7 +71,7 @@ pub(crate) fn parse(
             if closed {
                 blocks.push(Block::Core(core::Block::Pre(literal)));
             } else {
-                inline_parser.push_loss(start..start + consumed, "unclosed NamuMark literal block");
+                parser.push_loss(start..start + consumed, "unclosed NamuMark literal block");
                 blocks.push(Block::Paragraph(vec![Inline::Text(
                     input[start..start + consumed].into(),
                 )]));
@@ -96,7 +96,7 @@ pub(crate) fn parse(
                 end = offset + consumed + clean.len();
                 consumed += next.len();
             }
-            inline_parser.push_loss(offset..end, "unsupported NamuMark table");
+            parser.push_loss(offset..end, "unsupported NamuMark table");
             blocks.push(Block::Paragraph(vec![Inline::Text(text)]));
             offset += consumed;
             continue;
@@ -106,7 +106,7 @@ pub(crate) fn parse(
             let pos = text.as_ptr() as usize - line.as_ptr() as usize;
             blocks.push(Block::Heading {
                 level,
-                text: inline_parser.parse_line(text, offset + pos),
+                text: parser.parse_line(text, offset + pos),
             });
         } else if line.trim_start().len() >= 4
             && line.trim_start().len() <= 9
@@ -126,12 +126,12 @@ pub(crate) fn parse(
             }
             let pos = text.as_ptr() as usize - line.as_ptr() as usize;
             if list.last().is_some_and(|last| last.markers != mark) {
-                inline_parser.push_loss(span.clone(), "unsupported mixed NamuMark list");
+                parser.push_loss(span.clone(), "unsupported mixed NamuMark list");
                 flush(&mut blocks, &mut paragraph, &mut list);
             }
             list.push(core::ListLine {
                 markers: mark.into(),
-                content: inline_parser.parse_line(text, offset + pos),
+                content: parser.parse_line(text, offset + pos),
             });
         } else if let Some(title) = line
             .strip_prefix("#redirect ")
@@ -139,8 +139,8 @@ pub(crate) fn parse(
         {
             in_list_continuation = false;
             flush(&mut blocks, &mut paragraph, &mut list);
-            if inline_parser.metadata().redirect_target.is_some() {
-                inline_parser.push_loss(span.clone(), "additional NamuMark redirect");
+            if parser.has_redirect() {
+                parser.push_loss(span.clone(), "additional NamuMark redirect");
                 blocks.push(Block::Paragraph(vec![Inline::Text(line.into())]));
                 offset += raw.len();
                 continue;
@@ -148,20 +148,20 @@ pub(crate) fn parse(
             if target == Format::Wikitext
                 && (!metadata::valid_title(title) || changes_wiki_title(title))
             {
-                inline_parser.push_loss(
+                parser.push_loss(
                     span.clone(),
                     "MediaWiki cannot preserve this redirect title",
                 );
             }
             if target == Format::Html && !metadata::valid_title(title) {
-                inline_parser.push_loss(
+                parser.push_loss(
                     span.clone(),
                     "HTML metadata transport cannot preserve this redirect title",
                 );
             }
-            inline_parser.metadata_mut().redirect_target = Some(title.to_owned());
+            parser.set_redirect(title.to_owned());
             if target == Format::Gfm {
-                inline_parser.push_loss(span.clone(), "saving the GFM body alone loses the redirect");
+                parser.push_loss(span.clone(), "saving the GFM body alone loses the redirect");
             }
         } else {
             if line.starts_with('>')
@@ -170,7 +170,7 @@ pub(crate) fn parse(
                 || is_excluded_namumark_list(line)
             {
                 in_list_continuation = false;
-                inline_parser.push_loss(
+                parser.push_loss(
                     span.clone(),
                     "unsupported or malformed NamuMark block syntax",
                 );
@@ -181,7 +181,7 @@ pub(crate) fn parse(
             }
             if (!list.is_empty() || in_list_continuation) && line.starts_with(' ') {
                 in_list_continuation = true;
-                inline_parser.push_loss(span.clone(), "unsupported NamuMark list continuation");
+                parser.push_loss(span.clone(), "unsupported NamuMark list continuation");
                 flush(&mut blocks, &mut paragraph, &mut list);
                 blocks.push(Block::Paragraph(vec![Inline::Text(line.into())]));
                 offset += raw.len();
@@ -194,20 +194,12 @@ pub(crate) fn parse(
             if !paragraph.is_empty() {
                 paragraph.push(Inline::Html("<br>".into()));
             }
-            paragraph.extend(inline_parser.parse_line(line, offset));
+            paragraph.extend(parser.parse_line(line, offset));
         }
         offset += raw.len();
     }
     flush(&mut blocks, &mut paragraph, &mut list);
-    let metadata = inline_parser.into_metadata();
-    if metadata.redirect_target.is_some() && (!blocks.is_empty() || !metadata.categories.is_empty())
-    {
-        diagnostics.push(Diagnostic::loss(
-            0..input.len(),
-            "redirect with additional document content",
-        ));
-    }
-    (Document { blocks }, metadata)
+    parser.finish(blocks, input.len())
 }
 
 fn heading(line: &str) -> Option<(u8, &str)> {

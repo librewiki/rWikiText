@@ -3,17 +3,19 @@ use super::{
     links::changes_wiki_title,
     scan::{find_unescaped, unescape},
 };
-use crate::{inline, metadata, Diagnostic, Format, Inline, PageMetadata, WikiContext};
+use crate::{
+    inline, metadata, Block, Diagnostic, Document, Format, Inline, PageMetadata, WikiContext,
+};
 use std::ops::Range;
 
-pub(super) struct InlineParser<'a, 'ctx> {
+pub(super) struct NamuMarkParser<'a, 'ctx> {
     context: &'a WikiContext<'ctx>,
     target: Format,
     diagnostics: &'a mut Vec<Diagnostic>,
     metadata: PageMetadata,
 }
 
-impl<'a, 'ctx> InlineParser<'a, 'ctx> {
+impl<'a, 'ctx> NamuMarkParser<'a, 'ctx> {
     pub(super) fn new(
         context: &'a WikiContext<'ctx>,
         target: Format,
@@ -39,16 +41,24 @@ impl<'a, 'ctx> InlineParser<'a, 'ctx> {
         self.diagnostics.push(Diagnostic::loss(span, message));
     }
 
-    pub(super) fn metadata(&self) -> &PageMetadata {
-        &self.metadata
+    pub(super) fn has_redirect(&self) -> bool {
+        self.metadata.redirect_target.is_some()
     }
 
-    pub(super) fn metadata_mut(&mut self) -> &mut PageMetadata {
-        &mut self.metadata
+    pub(super) fn set_redirect(&mut self, title: String) {
+        self.metadata.redirect_target = Some(title);
     }
 
-    pub(super) fn into_metadata(self) -> PageMetadata {
-        self.metadata
+    pub(super) fn finish(self, blocks: Vec<Block>, input_len: usize) -> (Document, PageMetadata) {
+        if self.metadata.redirect_target.is_some()
+            && (!blocks.is_empty() || !self.metadata.categories.is_empty())
+        {
+            self.diagnostics.push(Diagnostic::loss(
+                0..input_len,
+                "redirect with additional document content",
+            ));
+        }
+        (Document { blocks }, self.metadata)
     }
 
     pub(super) fn parse_line(&mut self, input: &str, base: usize) -> Vec<Inline> {

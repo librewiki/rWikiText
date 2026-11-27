@@ -1,5 +1,5 @@
 use super::{
-    inline::InlineParser,
+    inline::NamuMarkParser,
     scan::{scan_unescaped, ScanAction},
 };
 use crate::Inline;
@@ -21,7 +21,7 @@ use std::borrow::Cow;
 /// diagnostics; on failure the whole construct is left to the caller's literal
 /// fallback.
 pub(super) fn parse_emphasis(
-    parser: &mut InlineParser<'_, '_>,
+    parser: &mut NamuMarkParser<'_, '_>,
     input: &str,
     base: usize,
     depth: usize,
@@ -86,7 +86,7 @@ pub(super) fn parse_emphasis(
 /// `strong == true`), donating a virtual closer from a shared 5+ run when the
 /// body holds an unmatched inner emphasis opener.
 fn parse_single_style(
-    parser: &mut InlineParser<'_, '_>,
+    parser: &mut NamuMarkParser<'_, '_>,
     input: &str,
     base: usize,
     depth: usize,
@@ -126,6 +126,7 @@ struct AsymmetricSpan {
     body_end: usize,
     tail_start: usize,
     tail_end: usize,
+    consumed: usize,
     inner_strong: bool,
 }
 
@@ -137,14 +138,13 @@ enum CombinedCloser {
 /// Parse an asymmetric combined emphasis span using the pre-located inner and
 /// outer closer offsets in `span`.
 fn parse_asymmetric(
-    parser: &mut InlineParser<'_, '_>,
+    parser: &mut NamuMarkParser<'_, '_>,
     input: &str,
     base: usize,
     depth: usize,
     body_start: usize,
     span: AsymmetricSpan,
 ) -> (Inline, usize) {
-    let outer_close_len = if span.inner_strong { 2 } else { 3 };
     let inner = parser.parse(
         &input[body_start..span.body_end],
         base + body_start,
@@ -164,7 +164,7 @@ fn parse_asymmetric(
         strong: !span.inner_strong,
         children,
     };
-    (node, span.tail_end + outer_close_len)
+    (node, span.consumed)
 }
 
 /// Locate the outer closer in `tail` after an asymmetric inner closer: when
@@ -186,19 +186,20 @@ fn asymmetric_closer(
     offset: usize,
     run: usize,
 ) -> Option<CombinedCloser> {
-    let inner_strong = match run {
-        2 => false,
-        3 | 4 => true,
+    let (inner_strong, inner_close_len, outer_close_len) = match run {
+        2 => (false, 2, 3),
+        3 | 4 => (true, 3, 2),
         _ => return None,
     };
-    let inner_close_len = if inner_strong { 3 } else { 2 };
     let tail_offset = find_outer_closer(&slice[offset + inner_close_len..], inner_strong)?;
     let body_end = body_start + offset;
     let tail_start = body_end + inner_close_len;
+    let tail_end = tail_start + tail_offset;
     Some(CombinedCloser::Asymmetric(AsymmetricSpan {
         body_end,
         tail_start,
-        tail_end: tail_start + tail_offset,
+        tail_end,
+        consumed: tail_end + outer_close_len,
         inner_strong,
     }))
 }

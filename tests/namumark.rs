@@ -221,7 +221,6 @@ fn namumark_subnumbered_section_anchor_is_excluded() {
 
 #[test]
 fn namumark_explicit_non_automatic_fragments_remain_active() {
-    use rwikitext::{convert_with_mode, ConversionMode, DiagnosticKind};
     let context = WikiContext::default();
     let cases = [
         ("[[Orchard#s-note|note]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-note\">note</a></p>"),
@@ -230,14 +229,7 @@ fn namumark_explicit_non_automatic_fragments_remain_active() {
         ("[[Orchard#s-]]", "<p><a rel=\"mw:WikiLink\" href=\"./Orchard#s-\">Orchard#s-</a></p>"),
     ];
     for (input, expected) in cases {
-        let request = ConversionRequest { source: Format::NamuMark, target: Format::Html, input, context: &context };
-        let result = convert(request).unwrap();
-        assert_eq!(result.content, expected, "input {input}");
-        assert!(
-            result.diagnostics.iter().all(|d| d.kind != DiagnosticKind::ConversionLoss),
-            "input {input}: {:?}", result.diagnostics
-        );
-        assert!(convert_with_mode(request, ConversionMode::Strict).is_ok(), "input {input}");
+        assert_clean_namumark(&context, Format::Html, input, expected);
     }
 }
 
