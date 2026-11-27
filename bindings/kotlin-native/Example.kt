@@ -16,7 +16,7 @@ fun main() {
     check("\"ok\":false" in failed && "offline" in failed && "wiki_lookup" in failed) { failed }
     val names = listOf("namumark", "wikitext", "gfm", "html")
     val inputs = listOf("== 제목 ==\\n'''안녕'''", "== 제목 ==\\n'''안녕'''", "## 제목\\n\\n**안녕**", "<h2>제목</h2><p><strong>안녕</strong></p>")
-    val markers = listOf(listOf("==", "'''"), listOf("==", "'''"), listOf("##", "**"), listOf("<h2", "<b"))
+    val markers = listOf(listOf("==", "'''"), listOf("==", "'''"), listOf("##", "**"), listOf("<h2", "<strong"))
     for (other in 1..3) for ((source, target) in listOf(0 to other, other to 0)) {
         val converted = convert("""{"source":"${names[source]}","target":"${names[target]}","input":"${inputs[source]}"}""")
         check("\"ok\":true" in converted && "제목" in converted && "안녕" in converted && markers[target].all { it in converted }) { converted }

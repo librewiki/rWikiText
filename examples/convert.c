@@ -115,7 +115,7 @@ int main(void) {
     const char *names[] = {"namumark", "wikitext", "gfm", "html"};
     const char *inputs[] = {"== 제목 ==\\n'''안녕'''", "== 제목 ==\\n'''안녕'''", "## 제목\\n\\n**안녕**", "<h2>제목</h2><p><strong>안녕</strong></p>"};
     const char *headings[] = {"==", "==", "##", "<h2"};
-    const char *bold[] = {"'''", "'''", "**", "<b"};
+    const char *bold[] = {"'''", "'''", "**", "<strong"};
     for (int other = 1; other < 4; ++other) for (int direction = 0; direction < 2; ++direction) {
         int source = direction == 0 ? 0 : other, target = direction == 0 ? other : 0;
         char request[512];

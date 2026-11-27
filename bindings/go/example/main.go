@@ -40,7 +40,7 @@ func main() {
 		log.Fatal(err)
 	}
 	inputs := map[rwikitext.Format]string{rwikitext.NamuMark: "== 제목 ==\n'''안녕'''", rwikitext.Wikitext: "== 제목 ==\n'''안녕'''", rwikitext.GFM: "## 제목\n\n**안녕**", rwikitext.HTML: "<h2>제목</h2><p><strong>안녕</strong></p>"}
-	markers := map[rwikitext.Format][]string{rwikitext.NamuMark: {"==", "'''"}, rwikitext.Wikitext: {"==", "'''"}, rwikitext.GFM: {"##", "**"}, rwikitext.HTML: {"<h2", "<b"}}
+	markers := map[rwikitext.Format][]string{rwikitext.NamuMark: {"==", "'''"}, rwikitext.Wikitext: {"==", "'''"}, rwikitext.GFM: {"##", "**"}, rwikitext.HTML: {"<h2", "<strong"}}
 	for _, other := range []rwikitext.Format{rwikitext.Wikitext, rwikitext.GFM, rwikitext.HTML} {
 		for _, pair := range [][2]rwikitext.Format{{rwikitext.NamuMark, other}, {other, rwikitext.NamuMark}} {
 			converted, err := rwikitext.Convert(pair[0], pair[1], inputs[pair[0]], rwikitext.Options{})
