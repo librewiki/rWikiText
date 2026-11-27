@@ -232,7 +232,7 @@ jobs:
             fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
           '
 
-      - name: Publish platform packages and main package
+      - name: Stage platform packages and main package
         working-directory: bindings/node
         run: |
           publish_if_missing() {
@@ -244,7 +244,7 @@ jobs:
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "${name}@${version} is already published on npm; skipping."
             else
-              (cd "$dir" && npm publish --provenance --access public $extra_flags)
+              (cd "$dir" && npm stage publish --provenance --access public $extra_flags)
             fi
           }
 
