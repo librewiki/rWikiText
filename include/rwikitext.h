@@ -1,18 +1,18 @@
 /**
  * @file rwikitext.h
- * @brief Version 1 C ABI for the rWikiText document converter.
+ * @brief Version 1 C ABI for rWikiText.
  *
- * rWikiText converts UTF-8 documents between MediaWiki wikitext (`"wikitext"`),
- * NamuMark (`"namumark"`), GitHub Flavored Markdown (`"gfm"`), and HTML (`"html"`).
+ * Converts UTF-8 documents between MediaWiki wikitext (`"wikitext"`), NamuMark
+ * (`"namumark"`), GitHub Flavored Markdown (`"gfm"`), and HTML (`"html"`).
  *
- * Supported format pairs:
+ * Supported pairs:
  * - `"wikitext"` <-> `"gfm"`, `"html"`, `"namumark"`
  * - `"namumark"` <-> `"wikitext"`, `"gfm"`, `"html"`
  *
  * Identity conversions (`source == target`) and direct `"gfm"` <-> `"html"`
- * conversions are unsupported and return a JSON error envelope (`"ok": false`).
+ * conversions return `{"ok": false, ...}`.
  *
- * @section request_schema Request JSON Schema
+ * @section request_schema Request JSON
  * Pass a NUL-terminated UTF-8 JSON object to rwikitext_v1_convert():
  * @code{.json}
  * {
@@ -35,16 +35,16 @@
  * `source`, `target`, and `input` are required. `context`, `mode` (`"best_effort"`
  * or `"strict"`), and `expansion_limits` are optional.
  *
- * @section response_schema Response JSON Schema
+ * @section response_schema Response JSON
  * - Success: `{"ok": true, "content": "...", "metadata": {"categories": [...],
  *   "category_sort_keys": [...], "redirect_target": null, "display_title": null},
  *   "diagnostics": [...]}`
  * - Failure: `{"ok": false, "error": "...", "diagnostics": [...]}`
- * - Each diagnostic has `kind` (`"conversion_loss"`, `"html_removal"`,
+ * - Diagnostics have `kind` (`"conversion_loss"`, `"html_removal"`,
  *   `"wiki_lookup"`, or `"expansion_limit"`), `start` and `end` (half-open UTF-8
- *   byte offsets in the input), and `message`.
+ *   byte offsets in `input`), and `message`.
  *
- * @section example_c Basic C Example
+ * @section example_c Example
  * @code{.c}
  * #include "rwikitext.h"
  * #include <stdio.h>
@@ -90,65 +90,61 @@ extern "C" {
 /** @brief Header ABI version. Compare with rwikitext_v1_abi_version() at runtime. */
 #define RWIKITEXT_ABI_VERSION 1
 
-/** @brief Lookup operation: fetch raw template wikitext (JSON string reply). */
+/** @brief Template wikitext lookup (JSON string reply). */
 #define RWIKITEXT_V1_TEMPLATE_TEXT 1
-/** @brief Lookup operation: check whether a page exists (JSON boolean reply). */
+/** @brief Page existence lookup (JSON boolean reply). */
 #define RWIKITEXT_V1_PAGE_EXISTS 2
-/** @brief Lookup operation: fetch file metadata (JSON object reply with `url` and optional `width`/`height`). */
+/** @brief File info lookup (JSON object reply with `url` and optional `width`/`height`). */
 #define RWIKITEXT_V1_FILE_INFO 3
 
-/** @brief Reply status: requested data is missing; pass `NULL` as `value_json`. */
+/** @brief Reply status for missing data; pass `NULL` as `value_json`. */
 #define RWIKITEXT_V1_MISSING 0
-/** @brief Reply status: requested data was found; pass a JSON value as `value_json`. */
+/** @brief Reply status for found data; pass a JSON value as `value_json`. */
 #define RWIKITEXT_V1_FOUND 1
-/** @brief Reply status: lookup failed; pass a JSON string error message as `value_json`. */
+/** @brief Reply status for a lookup error; pass a JSON string as `value_json`. */
 #define RWIKITEXT_V1_ERROR 2
 
-/** @brief Opaque reply handle passed to ::rwikitext_v1_lookup_fn callbacks. */
+/** @brief Opaque reply handle passed to ::rwikitext_v1_lookup_fn. */
 typedef struct rwikitext_v1_reply rwikitext_v1_reply;
 
 /**
- * @brief Synchronous wiki-data lookup callback invoked during conversion.
+ * @brief Synchronous wiki-data callback run on the calling thread.
  *
- * Runs on the thread that called rwikitext_v1_convert(). Leaving @p reply untouched
- * is equivalent to calling rwikitext_v1_reply_set() with ::RWIKITEXT_V1_MISSING.
- * NamuMark input does not invoke this callback.
+ * Leaving @p reply untouched is the same as setting ::RWIKITEXT_V1_MISSING.
+ * NamuMark input never calls this callback.
  *
  * @param user_data Opaque pointer passed to rwikitext_v1_convert().
- * @param operation One of ::RWIKITEXT_V1_TEMPLATE_TEXT, ::RWIKITEXT_V1_PAGE_EXISTS,
+ * @param operation ::RWIKITEXT_V1_TEMPLATE_TEXT, ::RWIKITEXT_V1_PAGE_EXISTS,
  *                  or ::RWIKITEXT_V1_FILE_INFO.
  * @param title     UTF-8 canonical title (namespace-prefixed, underscore-separated).
- *                  Not guaranteed to be NUL-terminated; use @p title_len.
- *                  Valid only for the duration of this callback invocation.
- * @param title_len Length of @p title in bytes.
- * @param reply     Opaque reply handle valid only for this callback invocation.
+ *                  Not NUL-terminated; use @p title_len. Valid only during this call.
+ * @param title_len Byte length of @p title.
+ * @param reply     Opaque reply handle valid only during this call.
  *
- * @warning Callbacks must return normally. Catch foreign exceptions and contain
- *          nonlocal jumps (`longjmp`) inside the callback before returning.
+ * @warning Must return normally. Catch foreign exceptions and contain `longjmp`
+ *          before returning.
  */
 typedef void (*rwikitext_v1_lookup_fn)(void *user_data, uint32_t operation,
                                      const char *title, size_t title_len,
                                      rwikitext_v1_reply *reply);
 
 /**
- * @brief Returns the runtime C ABI version implemented by the linked library.
+ * @brief Returns the C ABI version implemented by the linked library (`1`).
  *
- * @return ABI version number (currently ::RWIKITEXT_ABI_VERSION, i.e., `1`).
+ * @return ABI version number.
  */
 uint32_t rwikitext_v1_abi_version(void);
 
 /**
- * @brief Converts a document described by a UTF-8 JSON request.
+ * @brief Converts a document from a UTF-8 JSON request.
  *
- * @param request_json NUL-terminated UTF-8 JSON conversion request owned by the caller.
- *                     Must remain valid for the duration of the call.
- * @param lookup       Optional synchronous wiki-data callback, or `NULL` to report
- *                     all lookups as missing.
- * @param user_data    Opaque pointer forwarded unchanged to @p lookup.
+ * @param request_json Caller-owned, NUL-terminated UTF-8 JSON request.
+ *                     Must stay valid until this function returns.
+ * @param lookup       Optional synchronous callback, or `NULL` to report all lookups missing.
+ * @param user_data    Passed unchanged to @p lookup.
  *
- * @return Newly allocated, read-only, NUL-terminated UTF-8 JSON response string
- *         owned by the caller, or `NULL` on an unrecoverable internal failure.
- *         Every non-`NULL` return value must be released exactly once with
+ * @return Caller-owned, read-only, NUL-terminated UTF-8 JSON response, or `NULL`
+ *         on internal failure. Release every non-`NULL` result once with
  *         rwikitext_v1_free().
  *
  * @see rwikitext_v1_free()
@@ -158,39 +154,35 @@ const char *rwikitext_v1_convert(const char *request_json,
                                 rwikitext_v1_lookup_fn lookup, void *user_data);
 
 /**
- * @brief Releases a response buffer returned by rwikitext_v1_convert().
+ * @brief Frees a response returned by rwikitext_v1_convert().
  *
- * @param response Pointer previously returned by rwikitext_v1_convert(), or `NULL`
- *                 (which is a no-op). Must be freed at most once using the same
- *                 library instance that allocated it.
+ * @param response Pointer from rwikitext_v1_convert(), or `NULL` (no-op).
+ *                 Free each non-`NULL` pointer at most once with the same library instance.
  */
 void rwikitext_v1_free(const char *response);
 
 /**
- * @brief Populates the reply handle inside a ::rwikitext_v1_lookup_fn callback.
+ * @brief Sets the reply inside a ::rwikitext_v1_lookup_fn callback.
  *
- * The library copies @p value_json before returning, so the caller may immediately
- * free or reuse its buffer.
+ * Copies @p value_json before returning, so the callback can free or reuse its buffer
+ * immediately.
  *
- * Expected @p value_json format by @p status:
+ * Payload by @p status:
  * - ::RWIKITEXT_V1_MISSING: `NULL`.
  * - ::RWIKITEXT_V1_FOUND:
- *   - ::RWIKITEXT_V1_TEMPLATE_TEXT: JSON string (e.g., `"\"Hello, {{{1}}}!\""`).
+ *   - ::RWIKITEXT_V1_TEMPLATE_TEXT: JSON string (e.g. `"\"Hello, {{{1}}}!\""`).
  *   - ::RWIKITEXT_V1_PAGE_EXISTS: JSON boolean (`"true"` or `"false"`).
- *   - ::RWIKITEXT_V1_FILE_INFO: JSON object with `"url"` (string) and optional
- *     unsigned 32-bit `"width"` and `"height"` (e.g.,
+ *   - ::RWIKITEXT_V1_FILE_INFO: JSON object with `"url"` and optional `uint32`
+ *     `"width"` and `"height"` (e.g.
  *     `"{\"url\":\"https://example.org/a.png\",\"width\":300,\"height\":200}"`).
- * - ::RWIKITEXT_V1_ERROR: JSON string error message (e.g., `"\"wiki offline\""`).
+ * - ::RWIKITEXT_V1_ERROR: JSON string error message (e.g. `"\"wiki offline\""`).
  *
- * @param reply      Opaque reply pointer provided to the callback.
- * @param status     One of ::RWIKITEXT_V1_MISSING, ::RWIKITEXT_V1_FOUND, or
- *                   ::RWIKITEXT_V1_ERROR.
- * @param value_json NUL-terminated UTF-8 JSON payload, or `NULL` for
- *                   ::RWIKITEXT_V1_MISSING.
+ * @param reply      Reply handle from the callback.
+ * @param status     ::RWIKITEXT_V1_MISSING, ::RWIKITEXT_V1_FOUND, or ::RWIKITEXT_V1_ERROR.
+ * @param value_json NUL-terminated UTF-8 JSON value, or `NULL` for ::RWIKITEXT_V1_MISSING.
  *
- * @return `0` on success; `-1` if @p reply is `NULL`, @p status is invalid, or
- *         @p value_json is not valid UTF-8 / JSON (for a non-`NULL` @p reply, an
- *         invalid call also records a lookup error diagnostic).
+ * @return `0` on success, `-1` if @p reply is `NULL`, @p status is invalid, or
+ *         @p value_json is malformed UTF-8/JSON (records a lookup error on a valid @p reply).
  */
 int32_t rwikitext_v1_reply_set(rwikitext_v1_reply *reply, uint32_t status,
                               const char *value_json);

@@ -2,14 +2,14 @@ use crate::{html_policy, inline, Format, LookupError, WikiData};
 use scraper::{ElementRef, Node};
 use std::ops::Range;
 
-/// Rendering metadata for a wiki file returned by [`WikiData::file_info`].
+/// File URL and optional pixel dimensions returned by [`WikiData::file_info`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileInfo {
-    /// Absolute or root-relative URL for the file resource.
+    /// Absolute or root-relative URL.
     pub url: String,
-    /// Intrinsic image width in pixels, if known.
+    /// Image width in pixels, if known.
     pub width: Option<u32>,
-    /// Intrinsic image height in pixels, if known.
+    /// Image height in pixels, if known.
     pub height: Option<u32>,
 }
 

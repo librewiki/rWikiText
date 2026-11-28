@@ -61,48 +61,47 @@ public final class WikiText {
     static { System.loadLibrary("rwikitext_jni"); }
     private WikiText() {}
 
-    /** Lookup operation constant: fetch raw template wikitext (JSON string reply). */
+    /** Template wikitext lookup (JSON string reply). */
     public static final int TEMPLATE_TEXT = 1;
-    /** Lookup operation constant: check whether a page exists (JSON boolean reply). */
+    /** Page existence lookup (JSON boolean reply). */
     public static final int PAGE_EXISTS = 2;
-    /** Lookup operation constant: fetch file metadata (JSON object with {@code url} and optional {@code width}/{@code height}). */
+    /** File info lookup (JSON object with {@code url} and optional {@code width}/{@code height}). */
     public static final int FILE_INFO = 3;
 
-    /** Reply status constant: requested wiki data is missing. */
+    /** Reply status for missing data. */
     public static final int MISSING = 0;
-    /** Reply status constant: requested wiki data was found. */
+    /** Reply status for found data. */
     public static final int FOUND = 1;
-    /** Reply status constant: lookup failed with a JSON string error message. */
+    /** Reply status for a lookup error. */
     public static final int ERROR = 2;
 
     /**
-     * Synchronous wiki-data callback invoked on the thread calling {@link #convert(String, Lookup)}.
+     * Synchronous wiki-data callback run on the thread calling {@link #convert(String, Lookup)}.
      *
-     * <p>NamuMark input does not invoke this callback. Any uncaught exception thrown by
-     * {@link #lookup(int, String)} is caught by the JNI bridge and reported as a
-     * {@code "wiki_lookup"} error in the JSON response.
+     * <p>NamuMark input never calls this callback. Uncaught exceptions from
+     * {@link #lookup(int, String)} become {@code "wiki_lookup"} errors in the JSON response.
      */
     @FunctionalInterface
     public interface Lookup {
         /**
-         * Resolves wiki data for a canonical title during MediaWiki conversion.
+         * Looks up wiki data for a canonical title during MediaWiki conversion.
          *
-         * @param operation one of {@link #TEMPLATE_TEXT}, {@link #PAGE_EXISTS}, or {@link #FILE_INFO}
+         * @param operation {@link #TEMPLATE_TEXT}, {@link #PAGE_EXISTS}, or {@link #FILE_INFO}
          * @param title canonical namespace-prefixed, underscore-separated title
-         *              (for example, {@code "Template:Greeting"} or {@code "File:Logo.png"})
-         * @return a {@link Reply} carrying JSON-encoded data (not a raw unquoted string),
+         *              (e.g. {@code "Template:Greeting"}, {@code "File:Logo.png"})
+         * @return {@link Reply#found(String)} with JSON-encoded data (not a raw unquoted string),
          *         {@link Reply#missing()}, or {@link Reply#error(String)}
          */
         Reply lookup(int operation, String title);
     }
 
     /**
-     * Reply returned from a {@link Lookup} callback.
+     * Reply returned by a {@link Lookup} callback.
      */
     public static final class Reply {
-        /** Reply status: {@link WikiText#MISSING}, {@link WikiText#FOUND}, or {@link WikiText#ERROR}. */
+        /** {@link WikiText#MISSING}, {@link WikiText#FOUND}, or {@link WikiText#ERROR}. */
         public final int status;
-        /** UTF-8 encoded JSON payload, or {@code null} when {@link #status} is {@link WikiText#MISSING}. */
+        /** UTF-8 JSON bytes, or {@code null} when {@link #status} is {@link WikiText#MISSING}. */
         public final byte[] valueJson;
 
         private Reply(int status, String valueJson) {
@@ -111,31 +110,31 @@ public final class WikiText {
         }
 
         /**
-         * Creates a reply indicating that the requested wiki data is missing.
+         * Reports missing wiki data.
          *
-         * @return a missing-data reply
+         * @return missing-data reply
          */
         public static Reply missing() { return new Reply(MISSING, null); }
 
         /**
-         * Creates a reply carrying found wiki data encoded as a JSON value.
+         * Reports found wiki data as a JSON value.
          *
-         * @param valueJson valid UTF-8 JSON value without embedded NUL characters:
-         *                  a JSON string for {@link #TEMPLATE_TEXT}, a JSON boolean for
-         *                  {@link #PAGE_EXISTS}, or a JSON object for {@link #FILE_INFO}
-         * @return a found-data reply
+         * @param valueJson UTF-8 JSON value without NUL bytes: JSON string for
+         *                  {@link #TEMPLATE_TEXT}, JSON boolean for {@link #PAGE_EXISTS},
+         *                  or JSON object for {@link #FILE_INFO}
+         * @return found-data reply
          * @throws NullPointerException if {@code valueJson} is {@code null}
-         * @throws IllegalArgumentException if {@code valueJson} contains a NUL character ({@code '\0'})
+         * @throws IllegalArgumentException if {@code valueJson} contains {@code '\0'}
          */
         public static Reply found(String valueJson) { return new Reply(FOUND, Objects.requireNonNull(valueJson)); }
 
         /**
-         * Creates an error reply that aborts conversion with a located {@code "wiki_lookup"} diagnostic.
+         * Reports a lookup error and aborts conversion with a {@code "wiki_lookup"} diagnostic.
          *
-         * @param valueJson JSON string containing the error message (for example, {@code "\"offline\""})
-         * @return an error reply
+         * @param valueJson JSON string error message (e.g. {@code "\"offline\""})
+         * @return error reply
          * @throws NullPointerException if {@code valueJson} is {@code null}
-         * @throws IllegalArgumentException if {@code valueJson} contains a NUL character ({@code '\0'})
+         * @throws IllegalArgumentException if {@code valueJson} contains {@code '\0'}
          */
         public static Reply error(String valueJson) { return new Reply(ERROR, Objects.requireNonNull(valueJson)); }
     }
@@ -146,18 +145,18 @@ public final class WikiText {
     }
 
     /**
-     * Converts a document described by a UTF-8 JSON request and returns the native JSON response.
+     * Converts a document from a UTF-8 JSON request and returns the native JSON response.
      *
-     * <p>On success, the returned JSON object contains {@code "ok": true}, {@code "content"},
-     * {@code "metadata"}, and {@code "diagnostics"}. On failure, it contains {@code "ok": false},
-     * {@code "error"}, and {@code "diagnostics"}. Any exception thrown by {@code lookup} is
-     * converted into a {@code "wiki_lookup"} failure in the response.
+     * <p>Success returns {@code "ok": true} with {@code "content"}, {@code "metadata"}, and
+     * {@code "diagnostics"}. Failure returns {@code "ok": false} with {@code "error"} and
+     * {@code "diagnostics"}. Exceptions thrown by {@code lookup} become {@code "wiki_lookup"}
+     * failures in the response.
      *
-     * @param requestJson UTF-8 JSON conversion request without embedded NUL characters
-     * @param lookup optional synchronous wiki-data callback, or {@code null} to report all lookups missing
-     * @return UTF-8 JSON response envelope
+     * @param requestJson UTF-8 JSON request without NUL bytes
+     * @param lookup optional synchronous callback, or {@code null} to report all lookups missing
+     * @return UTF-8 JSON response
      * @throws NullPointerException if {@code requestJson} is {@code null}
-     * @throws IllegalArgumentException if {@code requestJson} contains a NUL character ({@code '\0'})
+     * @throws IllegalArgumentException if {@code requestJson} contains {@code '\0'}
      * @throws IllegalStateException if the native converter fails internally and returns {@code null}
      */
     public static String convert(String requestJson, Lookup lookup) {

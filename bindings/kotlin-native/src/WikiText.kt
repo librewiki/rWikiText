@@ -7,57 +7,56 @@ import cnames.structs.rwikitext_v1_reply
 import rwikitext.*
 
 /**
- * Reply returned from a [Lookup] callback to the rWikiText version 1 C ABI.
+ * Reply returned by a [Lookup] callback for the rWikiText version 1 C ABI.
  *
- * All [Found] and [Error] payloads must be valid UTF-8 JSON values without embedded
- * NUL characters:
- * - For [TEMPLATE_TEXT]: a JSON string (e.g., `"\"Hello, {{{1}}}!\""`).
- * - For [PAGE_EXISTS]: a JSON boolean (`"true"` or `"false"`).
- * - For [FILE_INFO]: a JSON object with `"url"` and optional `"width"` / `"height"`.
- * - For [Error]: a JSON string error message (e.g., `"\"offline\""`).
+ * [Found] and [Error] payloads must be valid UTF-8 JSON without NUL characters:
+ * - [TEMPLATE_TEXT]: JSON string (e.g. `"\"Hello, {{{1}}}!\""`)
+ * - [PAGE_EXISTS]: JSON boolean (`"true"` or `"false"`)
+ * - [FILE_INFO]: JSON object with `"url"` and optional `"width"` / `"height"`
+ * - [Error]: JSON string error message (e.g. `"\"offline\""`)
  */
 sealed class Reply {
-    /** Reports that the requested wiki data is missing. */
+    /** Missing wiki data. */
     object Missing : Reply()
 
     /**
-     * Reports found wiki data encoded as a JSON value.
+     * Found wiki data encoded as JSON.
      *
-     * @property valueJson UTF-8 JSON value without embedded NUL characters.
+     * @property valueJson UTF-8 JSON value without NUL characters.
      */
     data class Found(val valueJson: String) : Reply()
 
     /**
-     * Reports a lookup failure that aborts conversion with a `wiki_lookup` diagnostic.
+     * Lookup failure; aborts conversion with a `wiki_lookup` diagnostic.
      *
-     * @property valueJson UTF-8 JSON string error message without embedded NUL characters.
+     * @property valueJson UTF-8 JSON string error message without NUL characters.
      */
     data class Error(val valueJson: String) : Reply()
 }
 
-/** Lookup operation constant: fetch raw template wikitext (JSON string reply). */
+/** Template wikitext lookup (JSON string reply). */
 const val TEMPLATE_TEXT: UInt = 1u
 
-/** Lookup operation constant: check whether a page exists (JSON boolean reply). */
+/** Page existence lookup (JSON boolean reply). */
 const val PAGE_EXISTS: UInt = 2u
 
-/** Lookup operation constant: fetch file metadata (JSON object reply with `url` and optional `width`/`height`). */
+/** File info lookup (JSON object reply with `url` and optional `width`/`height`). */
 const val FILE_INFO: UInt = 3u
 
 /**
- * Synchronous wiki-data callback invoked on the thread calling [convert].
+ * Synchronous wiki-data callback run on the thread calling [convert].
  *
- * NamuMark input does not invoke this callback. Any uncaught [Throwable] thrown inside
- * [lookup] is caught and converted into a `wiki_lookup` error diagnostic.
+ * NamuMark input never calls this callback. Uncaught [Throwable]s from [lookup]
+ * become `wiki_lookup` errors in the JSON response.
  */
 fun interface Lookup {
     /**
-     * Resolves wiki data for a canonical title during MediaWiki conversion.
+     * Looks up wiki data for a canonical title during MediaWiki conversion.
      *
-     * @param operation One of [TEMPLATE_TEXT], [PAGE_EXISTS], or [FILE_INFO].
+     * @param operation [TEMPLATE_TEXT], [PAGE_EXISTS], or [FILE_INFO].
      * @param title Canonical namespace-prefixed, underscore-separated title
-     * (for example, `"Template:Greeting"` or `"File:Logo.png"`).
-     * @return A [Reply] reporting missing data, JSON-encoded found data, or an error.
+     * (e.g. `"Template:Greeting"`, `"File:Logo.png"`).
+     * @return [Reply.Missing], [Reply.Found], or [Reply.Error].
      */
     fun lookup(operation: UInt, title: String): Reply
 }
@@ -126,13 +125,12 @@ private val callback = staticCFunction { user: COpaquePointer?, operation: UInt,
  * println(responseJson)
  * ```
  *
- * @param requestJson UTF-8 JSON conversion request without embedded NUL characters.
- * @param lookup Optional synchronous wiki-data callback, or `null` to report all lookups missing.
- * @return UTF-8 JSON response envelope (`"ok": true` with `content`, `metadata`, `diagnostics`,
+ * @param requestJson UTF-8 JSON request without NUL characters.
+ * @param lookup Optional synchronous callback, or `null` to report all lookups missing.
+ * @return UTF-8 JSON response (`"ok": true` with `content`, `metadata`, `diagnostics`,
  * or `"ok": false` with `error` and `diagnostics`).
- * @throws IllegalArgumentException If [requestJson] contains a NUL character (`'\u0000'`).
- * @throws IllegalStateException If the linked native ABI version is unsupported or the native
- * converter fails internally.
+ * @throws IllegalArgumentException If [requestJson] contains `'\u0000'`.
+ * @throws IllegalStateException If the linked ABI version is unsupported or conversion fails internally.
  */
 fun convert(requestJson: String, lookup: Lookup? = null): String {
     check(rwikitext_v1_abi_version() == 1u) { "Unsupported native ABI" }

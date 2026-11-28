@@ -1,12 +1,12 @@
-//! Document converter for MediaWiki wikitext, NamuMark, GitHub Flavored Markdown (GFM), and HTML.
+//! Converts between MediaWiki wikitext, NamuMark, GitHub Flavored Markdown (GFM), and HTML.
 //!
-//! `rwikitext` converts documents between supported wiki and markup formats while preserving
-//! page metadata (categories, sort keys, redirects, display titles) and reporting structured
-//! diagnostics for any conversion loss, HTML sanitization, wiki lookup error, or expansion limit.
+//! Page metadata (categories, sort keys, redirects, display title) is returned separately
+//! from the converted body. Lossy constructs, stripped HTML, lookup errors, and
+//! expansion-limit hits are reported as UTF-8 byte-span diagnostics.
 //!
 //! # Supported Format Pairs
 //!
-//! | Source | Supported targets |
+//! | Source | Targets |
 //! | --- | --- |
 //! | [`Format::Wikitext`] | [`Format::Gfm`], [`Format::Html`], [`Format::NamuMark`] |
 //! | [`Format::NamuMark`] | [`Format::Wikitext`], [`Format::Gfm`], [`Format::Html`] |
@@ -14,7 +14,7 @@
 //! | [`Format::Html`] | [`Format::Wikitext`], [`Format::NamuMark`] |
 //!
 //! Identity conversions (`source == target`) and direct [`Format::Gfm`] ↔ [`Format::Html`]
-//! conversions are unsupported and return [`Err`] with a [`ConversionError`].
+//! conversions return [`Err`] with a [`ConversionError`].
 //!
 //! # Quick Start
 //!
@@ -41,9 +41,9 @@
 //!
 //! # Wiki Data Lookups and Strict Mode
 //!
-//! Supply a [`WikiData`] implementation through [`ConversionOptions`] to expand MediaWiki
-//! templates, check link existence, and resolve file metadata. Use [`ConversionMode::Strict`]
-//! to fail the conversion whenever document meaning would be lost.
+//! Pass a [`WikiData`] implementation via [`ConversionOptions`] to expand MediaWiki
+//! templates, check link targets, and resolve file info. Set [`ConversionMode::Strict`]
+//! to fail whenever a construct would lose meaning.
 //!
 //! ```rust
 //! use rwikitext::{
@@ -129,10 +129,9 @@ pub(crate) use render::{
 };
 pub(crate) use spans::{locate, original_range};
 
-/// Supported input and output document formats.
+/// Document format for conversion input or output.
 ///
-/// String parsing via [`FromStr`] accepts the lowercase names `"wikitext"`,
-/// `"namumark"`, `"gfm"`, and `"html"`.
+/// [`FromStr`] accepts `"wikitext"`, `"namumark"`, `"gfm"`, and `"html"`.
 ///
 /// # Examples
 ///
@@ -151,7 +150,7 @@ pub enum Format {
     Wikitext,
     /// GitHub Flavored Markdown (GFM).
     Gfm,
-    /// HTML (Parsoid-compatible output when converting from MediaWiki wikitext).
+    /// HTML (Parsoid-compatible when converting from MediaWiki wikitext).
     Html,
     /// NamuMark wiki markup.
     NamuMark,
@@ -170,23 +169,20 @@ impl FromStr for Format {
     }
 }
 
-/// Page- and site-level context applied during conversion.
+/// Page and site settings used during conversion.
 ///
 /// MediaWiki magic words such as `{{PAGENAME}}`, `{{CONTENTLANGUAGE}}`, and
-/// `{{CURRENTTIMESTAMP}}` read from this context.
+/// `{{CURRENTTIMESTAMP}}` read from these fields.
 ///
-/// # Defaults
-///
-/// - `page_title`: `""`
-/// - `site_language`: `"en"`
-/// - `reference_time`: `"1970-01-01T00:00:00Z"`
+/// Defaults: `page_title` is `""`, `site_language` is `"en"`, and
+/// `reference_time` is `"1970-01-01T00:00:00Z"`.
 #[derive(Debug, Clone, Copy)]
 pub struct WikiContext<'a> {
-    /// Title of the page being converted (for example, `"Guide"` or `"Help:Contents"`).
+    /// Current page title (e.g. `"Guide"` or `"Help:Contents"`).
     pub page_title: &'a str,
-    /// BCP 47 / MediaWiki content language code (for example, `"en"` or `"ko"`).
+    /// Site language code (e.g. `"en"`, `"ko"`).
     pub site_language: &'a str,
-    /// Reference UTC timestamp in RFC 3339 format (for example, `"2025-03-04T05:06:07Z"`).
+    /// Reference UTC timestamp in RFC 3339 format (e.g. `"2025-03-04T05:06:07Z"`).
     pub reference_time: &'a str,
 }
 
@@ -200,66 +196,63 @@ impl Default for WikiContext<'_> {
     }
 }
 
-/// Input payload and format selection for a document conversion.
+/// Document text, formats, and context for a conversion.
 #[derive(Clone, Copy)]
 pub struct ConversionRequest<'a> {
-    /// Format of [`input`](Self::input).
+    /// Format of `input`.
     pub source: Format,
-    /// Desired output format.
+    /// Target output format.
     pub target: Format,
     /// UTF-8 document text to convert.
     pub input: &'a str,
-    /// Page and site context used during parsing, expansion, and rendering.
+    /// Page and site context.
     pub context: &'a WikiContext<'a>,
 }
 
-/// Page-level metadata extracted outside the rendered document body.
+/// Page metadata extracted outside the rendered document body.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PageMetadata {
     /// Category names in document order.
     pub categories: Vec<String>,
-    /// Optional sort keys parallel to [`categories`](Self::categories).
-    ///
-    /// `category_sort_keys[i]` corresponds to `categories[i]`, with `None` when no
-    /// explicit sort key was specified.
+    /// Sort keys parallel to `categories` (`None` when omitted).
     pub category_sort_keys: Vec<Option<String>>,
-    /// Target page title if the document is a redirect, or `None` otherwise.
+    /// Redirect destination page title, if the document is a redirect.
     pub redirect_target: Option<String>,
-    /// Custom display title set by `{{DISPLAYTITLE:...}}`, or `None` if unset.
+    /// Custom display title set by `{{DISPLAYTITLE:...}}`.
     pub display_title: Option<String>,
 }
 
-/// Controls how conversion loss is handled.
+/// How conversion loss is handled.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionMode {
-    /// Complete the conversion and report any lossy constructs in [`ConversionResult::diagnostics`].
+    /// Finish converting and record lossy constructs in [`ConversionResult::diagnostics`].
     #[default]
     BestEffort,
-    /// Fail with [`ConversionError`] if any construct would lose document meaning.
+    /// Fail with [`ConversionError`] if any construct would lose meaning.
     Strict,
 }
 
-/// Category of a [`Diagnostic`] emitted during conversion.
+/// Category of a [`Diagnostic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticKind {
     /// A source construct could not be represented losslessly in the target format.
     ConversionLoss,
-    /// Unsafe or disallowed raw HTML was stripped during sanitization.
+    /// Disallowed raw HTML was stripped.
     HtmlRemoval,
-    /// A [`WikiData`] callback returned an error or invalid reply.
+    /// A [`WikiData`] lookup failed or returned an invalid reply.
     WikiLookup,
-    /// MediaWiki template expansion exceeded a configured [`ExpansionLimits`] bound.
+    /// MediaWiki expansion exceeded an [`ExpansionLimits`] bound.
     ExpansionLimit,
 }
 
-/// Located warning or failure detail produced during conversion.
+/// Warning or error tied to a byte span in the original input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
-    /// Classification of the issue.
+    /// Diagnostic category.
     pub kind: DiagnosticKind,
     /// Half-open UTF-8 byte range (`start..end`) in the original input.
     pub span: Range<usize>,
-    /// Human-readable description of the issue.
+    /// Description of the issue.
     pub message: String,
 }
 
@@ -293,21 +286,21 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-/// Successful output of a document conversion.
+/// Output of a successful conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionResult {
-    /// Converted document text in the requested target format.
+    /// Converted text in the target format.
     pub content: String,
-    /// Page metadata extracted from the source document.
+    /// Page metadata extracted from the source.
     pub metadata: PageMetadata,
     /// Non-fatal diagnostics recorded during conversion.
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Error returned when a conversion fails.
+/// Error returned when conversion fails.
 ///
-/// Failures include unsupported format pairs, strict-mode conversion loss,
-/// [`WikiData`] lookup failures, and exceeded [`ExpansionLimits`].
+/// Returned for unsupported format pairs, strict-mode conversion loss,
+/// [`WikiData`] lookup errors, and exceeded [`ExpansionLimits`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionError {
     message: String,
@@ -322,9 +315,7 @@ impl ConversionError {
         }
     }
 
-    /// Returns the located diagnostics associated with this failure.
-    ///
-    /// Invalid requests and unsupported format pairs return an empty slice.
+    /// Diagnostics associated with this error. Empty for invalid requests or unsupported format pairs.
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
@@ -450,16 +441,13 @@ pub fn convert_with_mode(
     )
 }
 
-/// Converts a document with full control over [`ConversionMode`], [`WikiData`] lookups,
-/// and [`ExpansionLimits`].
+/// Converts a document with custom mode, wiki data, and expansion limits.
 ///
 /// # Errors
 ///
-/// Returns [`ConversionError`] if:
-/// - the `(source, target)` format pair is unsupported,
-/// - `options.mode` is [`ConversionMode::Strict`] and conversion loss occurs,
-/// - a [`WikiData`] lookup returns [`Err`], or
-/// - MediaWiki template expansion exceeds `options.expansion_limits`.
+/// Fails with [`ConversionError`] when the format pair is unsupported, `mode` is
+/// [`ConversionMode::Strict`] and conversion loss occurs, a [`WikiData`] lookup
+/// returns [`Err`], or expansion exceeds `options.expansion_limits`.
 ///
 /// # Examples
 ///

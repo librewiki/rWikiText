@@ -1,43 +1,40 @@
 use crate::{ConversionMode, FileInfo};
 use std::fmt;
 
-/// Caller-owned wiki data provider for MediaWiki expansion and link rendering.
+/// Caller-owned wiki data for MediaWiki expansion and link rendering.
 ///
-/// Lookups run synchronously on the conversion thread. Every `title` argument uses
-/// canonical namespace casing and underscore-separated spelling (for example,
-/// `"Template:Greeting"`, `"Main_Page"`, or `"File:Example.png"`).
+/// Lookups run synchronously on the conversion thread. Titles use canonical
+/// namespace casing and underscores (e.g. `"Template:Greeting"`, `"Main_Page"`,
+/// `"File:Example.png"`).
 ///
-/// Returning `Ok(None)` reports missing data and falls back to the converter's default
-/// offline behavior. Returning `Err(LookupError)` aborts the conversion with a located
+/// `Ok(None)` reports missing data and keeps the converter's offline fallback.
+/// `Err(LookupError)` aborts conversion with a
 /// [`DiagnosticKind::WikiLookup`](crate::DiagnosticKind::WikiLookup) diagnostic.
-///
-/// NamuMark input does not expand MediaWiki templates or invoke `WikiData` callbacks.
+/// NamuMark input never calls `WikiData`.
 pub trait WikiData {
-    /// Returns the raw wikitext source of a transcluded template, or `Ok(None)` if missing.
+    /// Raw wikitext for a transcluded template, or `Ok(None)` if missing.
     fn template_text(&self, _title: &str) -> Result<Option<String>, LookupError> {
         Ok(None)
     }
 
-    /// Reports whether the given page exists on the wiki.
-    ///
-    /// Return `Ok(Some(true))` if the page exists, `Ok(Some(false))` if it is known to be
-    /// absent (producing red links in HTML output), or `Ok(None)` if existence is unknown.
+    /// Whether a page exists. `Ok(Some(false))` explicitly marks it absent (red link in HTML);
+    /// `Ok(None)` leaves existence unknown.
     fn page_exists(&self, _title: &str) -> Result<Option<bool>, LookupError> {
         Ok(None)
     }
 
-    /// Returns rendering metadata for a wiki file, or `Ok(None)` if unknown.
+    /// URL and optional dimensions for a wiki file, or `Ok(None)` if unknown.
     fn file_info(&self, _title: &str) -> Result<Option<FileInfo>, LookupError> {
         Ok(None)
     }
 }
 
-/// Error returned by a [`WikiData`] callback when a lookup fails.
+/// Error returned by a [`WikiData`] lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LookupError(String);
 
 impl LookupError {
-    /// Creates a new lookup error carrying a human-readable diagnostic message.
+    /// Creates a lookup error with the given message.
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
@@ -51,23 +48,19 @@ impl fmt::Display for LookupError {
 
 impl std::error::Error for LookupError {}
 
-/// Bounds that guard MediaWiki template and parser-function expansion.
+/// Limits for MediaWiki template and parser-function expansion.
 ///
-/// Exceeding any bound aborts the conversion with a
+/// Exceeding any limit aborts conversion with a
 /// [`DiagnosticKind::ExpansionLimit`](crate::DiagnosticKind::ExpansionLimit) diagnostic.
 ///
-/// # Defaults
-///
-/// - `max_depth`: `40`
-/// - `max_expansions`: `10_000`
-/// - `max_output_bytes`: `2_097_152` (2 MiB)
+/// Defaults: `max_depth = 40`, `max_expansions = 10_000`, `max_output_bytes = 2_097_152` (2 MiB).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpansionLimits {
-    /// Maximum nesting depth of recursive template expansions.
+    /// Maximum template nesting depth.
     pub max_depth: usize,
-    /// Maximum total number of template and parser-function expansions.
+    /// Maximum number of template and parser-function expansions.
     pub max_expansions: usize,
-    /// Maximum size in bytes of the expanded wikitext buffer.
+    /// Maximum expanded wikitext size in bytes.
     pub max_output_bytes: usize,
 }
 
@@ -81,13 +74,13 @@ impl Default for ExpansionLimits {
     }
 }
 
-/// Configuration passed to [`convert_with_options`](crate::convert_with_options).
+/// Options for [`convert_with_options`](crate::convert_with_options).
 #[derive(Clone, Copy, Default)]
 pub struct ConversionOptions<'a> {
-    /// Controls whether conversion loss is reported as diagnostics or fails the call.
+    /// How conversion loss is handled.
     pub mode: ConversionMode,
-    /// Optional synchronous wiki data provider; `None` reports missing for all lookups.
+    /// Optional wiki data provider; `None` reports missing for every lookup.
     pub wiki_data: Option<&'a dyn WikiData>,
-    /// Resource bounds for MediaWiki template expansion.
+    /// Limits for MediaWiki template expansion.
     pub expansion_limits: ExpansionLimits,
 }

@@ -9,17 +9,17 @@ use rwikitext::{
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-/// Page- and site-level context applied during document conversion.
+/// Page and site settings used during conversion.
 ///
 /// MediaWiki magic words such as `{{PAGENAME}}`, `{{CONTENTLANGUAGE}}`, and
 /// `{{CURRENTTIMESTAMP}}` read from these fields.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct WikiContext {
-    /// Title of the page being converted (defaults to `""`).
+    /// Current page title (defaults to `""`).
     #[napi(js_name = "page_title")]
     pub page_title: Option<String>,
-    /// BCP 47 / MediaWiki site language code (defaults to `"en"`).
+    /// Site language code (defaults to `"en"`).
     #[napi(js_name = "site_language")]
     pub site_language: Option<String>,
     /// Reference UTC timestamp in RFC 3339 format (defaults to `"1970-01-01T00:00:00Z"`).
@@ -27,14 +27,14 @@ pub struct WikiContext {
     pub reference_time: Option<String>,
 }
 
-/// Resource bounds for MediaWiki template and parser-function expansion.
+/// Limits for MediaWiki template and parser-function expansion.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct ExpansionLimits {
-    /// Maximum nesting depth of recursive template expansions (defaults to `40`).
+    /// Maximum template nesting depth (defaults to `40`).
     #[napi(js_name = "max_depth")]
     pub max_depth: Option<u32>,
-    /// Maximum total number of template/function expansions (defaults to `10000`).
+    /// Maximum number of template and parser-function expansions (defaults to `10000`).
     #[napi(js_name = "max_expansions")]
     pub max_expansions: Option<u32>,
     /// Maximum expanded wikitext size in bytes (defaults to `2097152`).
@@ -42,9 +42,9 @@ pub struct ExpansionLimits {
     pub max_output_bytes: Option<u32>,
 }
 
-/// Request object passed to `convert` and `convertAsync`.
+/// Input and options for `convert` and `convertAsync`.
 ///
-/// Supported format pairs:
+/// Supported pairs:
 /// - `"wikitext"` <-> `"gfm"`, `"html"`, `"namumark"`
 /// - `"namumark"` <-> `"wikitext"`, `"gfm"`, `"html"`
 ///
@@ -52,43 +52,43 @@ pub struct ExpansionLimits {
 #[napi(object)]
 #[derive(Clone)]
 pub struct ConversionRequest {
-    /// Input document format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
+    /// Input format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
     pub source: String,
-    /// Output document format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
+    /// Output format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
     pub target: String,
     /// UTF-8 document text to convert.
     pub input: String,
     /// Optional page and site context.
     pub context: Option<WikiContext>,
-    /// Conversion mode: `"best_effort"` (default) or `"strict"` (fail on conversion loss).
+    /// `"best_effort"` (default) or `"strict"` (fail on conversion loss).
     pub mode: Option<String>,
-    /// Optional MediaWiki template expansion limits.
+    /// Optional MediaWiki expansion limits.
     #[napi(js_name = "expansion_limits")]
     pub expansion_limits: Option<ExpansionLimits>,
 }
 
-/// Located diagnostic emitted during conversion.
+/// Warning or error tied to a byte span in `request.input`.
 #[napi(object)]
 pub struct Diagnostic {
-    /// Diagnostic category: `"conversion_loss"`, `"html_removal"`, `"wiki_lookup"`, or `"expansion_limit"`.
+    /// `"conversion_loss"`, `"html_removal"`, `"wiki_lookup"`, or `"expansion_limit"`.
     pub kind: String,
-    /// Inclusive start UTF-8 byte offset in `request.input`.
+    /// Inclusive UTF-8 byte offset in `request.input`.
     pub start: u32,
-    /// Exclusive end UTF-8 byte offset in `request.input`.
+    /// Exclusive UTF-8 byte offset in `request.input`.
     pub end: u32,
-    /// Human-readable diagnostic message.
+    /// Description of the issue.
     pub message: String,
 }
 
-/// Page-level metadata extracted outside the rendered document body.
+/// Page metadata extracted outside the rendered document body.
 #[napi(object)]
 pub struct PageMetadata {
     /// Category names in document order.
     pub categories: Vec<String>,
-    /// Sort keys parallel to `categories` (`null` when unspecified).
+    /// Sort keys parallel to `categories` (`null` when omitted).
     #[napi(js_name = "category_sort_keys")]
     pub category_sort_keys: Vec<Either<String, Null>>,
-    /// Redirect target page title, or `null` if the document is not a redirect.
+    /// Redirect destination page title, or `null` if not a redirect.
     #[napi(js_name = "redirect_target")]
     pub redirect_target: Either<String, Null>,
     /// Custom display title from `{{DISPLAYTITLE:...}}`, or `null` if unset.
@@ -96,16 +96,16 @@ pub struct PageMetadata {
     pub display_title: Either<String, Null>,
 }
 
-/// Response envelope returned by `convert` and `convertAsync`.
+/// Result returned by `convert` and `convertAsync`.
 #[napi(object)]
 pub struct ConversionResponse {
-    /// `true` when conversion succeeded; `false` when it failed.
+    /// `true` on success, `false` on failure.
     pub ok: bool,
-    /// Converted document text (present when `ok` is `true`).
+    /// Converted text (present when `ok` is `true`).
     pub content: Option<String>,
-    /// Extracted page metadata (present when `ok` is `true`).
+    /// Page metadata (present when `ok` is `true`).
     pub metadata: Option<PageMetadata>,
-    /// Failure description (present when `ok` is `false`).
+    /// Error message (present when `ok` is `false`).
     pub error: Option<String>,
     /// Diagnostics recorded during conversion or failure.
     pub diagnostics: Vec<Diagnostic>,
@@ -452,10 +452,9 @@ pub fn convert_async(request: ConversionRequest) -> AsyncTask<ConvertTask> {
     AsyncTask::new(ConvertTask { request })
 }
 
-/// Class-based wrapper exposing {@link convert} and {@link convertAsync}.
+/// Class wrapper around {@link convert} and {@link convertAsync}.
 ///
-/// Provided for API parity with other language bindings; the addon embeds the
-/// native converter directly and ignores any `libraryPath` constructor argument.
+/// The addon embeds the converter directly, so any `libraryPath` argument is ignored.
 ///
 /// @example
 /// ```ts
@@ -469,9 +468,9 @@ pub struct WikiText;
 
 #[napi]
 impl WikiText {
-    /// Creates a new `WikiText` converter instance.
+    /// Creates a `WikiText` instance.
     ///
-    /// @param libraryPath Optional ignored path kept for compatibility with ctypes-style bindings.
+    /// @param libraryPath Ignored; kept for compatibility with ctypes-style bindings.
     #[napi(constructor)]
     pub fn new(_library_path: Option<String>) -> Self {
         Self

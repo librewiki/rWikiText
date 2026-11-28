@@ -4,42 +4,41 @@ Converts UTF-8 documents between MediaWiki wikitext (``"wikitext"``),
 NamuMark (``"namumark"``), GitHub Flavored Markdown (``"gfm"``), and HTML
 (``"html"``).
 
-Supported format pairs:
+Supported pairs:
     - ``"wikitext"`` <-> ``"gfm"``, ``"html"``, ``"namumark"``
     - ``"namumark"`` <-> ``"wikitext"``, ``"gfm"``, ``"html"``
 
-Identity conversions and direct ``"gfm"`` <-> ``"html"`` conversions are
-unsupported and return a response dict with ``ok=False``.
+Identity conversions and direct ``"gfm"`` <-> ``"html"`` conversions return a
+dict with ``ok=False``.
 
-Example:
-    Basic conversion and wiki-data lookup callback::
+Example::
 
-        from rwikitext import WikiText
+    from rwikitext import WikiText
 
-        wiki = WikiText("target/release/librwikitext.so")
+    wiki = WikiText("target/release/librwikitext.so")
 
-        def lookup(operation, title):
-            if operation == "template_text" and title == "Template:Greeting":
-                return "Hello, {{{1}}}!"
-            if operation == "page_exists":
-                return title == "Main_Page"
-            if operation == "file_info" and title == "File:Logo.png":
-                return {"url": "https://example.org/logo.png", "width": 200, "height": 100}
-            return None
+    def lookup(operation, title):
+        if operation == "template_text" and title == "Template:Greeting":
+            return "Hello, {{{1}}}!"
+        if operation == "page_exists":
+            return title == "Main_Page"
+        if operation == "file_info" and title == "File:Logo.png":
+            return {"url": "https://example.org/logo.png", "width": 200, "height": 100}
+        return None
 
-        result = wiki.convert(
-            {
-                "source": "wikitext",
-                "target": "gfm",
-                "input": "{{Greeting|{{PAGENAME}}}}\\n[[Category:Docs|Guide]]",
-                "context": {"page_title": "Guide"},
-                "mode": "best_effort",
-            },
-            lookup=lookup,
-        )
-        if result["ok"]:
-            print(result["content"])
-            print(result["metadata"]["categories"])
+    result = wiki.convert(
+        {
+            "source": "wikitext",
+            "target": "gfm",
+            "input": "{{Greeting|{{PAGENAME}}}}\\n[[Category:Docs|Guide]]",
+            "context": {"page_title": "Guide"},
+            "mode": "best_effort",
+        },
+        lookup=lookup,
+    )
+    if result["ok"]:
+        print(result["content"])
+        print(result["metadata"]["categories"])
 """
 import ctypes
 import json
@@ -50,23 +49,23 @@ _OPERATIONS = {1: "template_text", 2: "page_exists", 3: "file_info"}
 
 
 class WikiText:
-    """Wrapper around the ``librwikitext`` shared library (C ABI v1).
+    """Wrapper around ``librwikitext`` (C ABI v1).
 
-    An instance may be reused across multiple :meth:`convert` calls, including
-    re-entrant calls made from inside a lookup callback.
+    Safe to reuse across calls, including nested :meth:`convert` calls made
+    from inside a lookup callback.
     """
 
     def __init__(self, library_path):
-        """Load the ``librwikitext`` shared library and verify ABI version 1.
+        """Load ``librwikitext`` and check that it implements ABI version 1.
 
         Args:
-            library_path (str | os.PathLike): Path to the compiled
-                ``librwikitext`` shared library (for example,
-                ``"target/release/librwikitext.so"`` or ``"librwikitext.dylib"``).
+            library_path (str | os.PathLike): Path to the compiled shared
+                library (e.g. ``"target/release/librwikitext.so"`` or
+                ``"librwikitext.dylib"``).
 
         Raises:
             OSError: If the shared library cannot be loaded.
-            RuntimeError: If the loaded library does not implement ABI version 1.
+            RuntimeError: If the library ABI version is not 1.
         """
         self._lib = ctypes.CDLL(str(library_path))
         self._lib.rwikitext_v1_abi_version.restype = ctypes.c_uint32
@@ -83,44 +82,41 @@ class WikiText:
         """Convert a document synchronously and return the decoded response dict.
 
         Args:
-            request (dict): Conversion request mapping with keys:
-                - ``source`` (str): Required input format (``"wikitext"``,
-                  ``"namumark"``, ``"gfm"``, or ``"html"``).
-                - ``target`` (str): Required output format.
-                - ``input`` (str): Required UTF-8 document text.
-                - ``context`` (dict, optional): Page/site settings with optional
-                  ``page_title`` (default ``""``), ``site_language`` (default
-                  ``"en"``), and ``reference_time`` (RFC 3339 UTC timestamp,
-                  default ``"1970-01-01T00:00:00Z"``).
+            request (dict): Conversion request with keys:
+                - ``source`` (str): Input format (``"wikitext"``, ``"namumark"``,
+                  ``"gfm"``, or ``"html"``).
+                - ``target`` (str): Output format.
+                - ``input`` (str): UTF-8 document text.
+                - ``context`` (dict, optional): ``page_title`` (``""``),
+                  ``site_language`` (``"en"``), and ``reference_time``
+                  (RFC 3339 UTC, ``"1970-01-01T00:00:00Z"``).
                 - ``mode`` (str, optional): ``"best_effort"`` (default) or
                   ``"strict"`` (fail on conversion loss).
-                - ``expansion_limits`` (dict, optional): MediaWiki expansion
-                  bounds with optional non-negative integers ``max_depth`` (40),
-                  ``max_expansions`` (10000), and ``max_output_bytes`` (2097152).
+                - ``expansion_limits`` (dict, optional): Non-negative ints
+                  ``max_depth`` (40), ``max_expansions`` (10000), and
+                  ``max_output_bytes`` (2097152).
             lookup (Callable[[str, str], Any] | None, optional): Synchronous
-                callback invoked on the calling thread as
-                ``lookup(operation, title)``, where ``title`` uses canonical
-                namespace casing and underscores (e.g., ``"Template:Greeting"``).
-                Return ``None`` to report missing data, or:
+                callback called on the current thread as ``lookup(operation, title)``.
+                ``title`` uses canonical namespace casing and underscores (e.g.
+                ``"Template:Greeting"``). Return ``None`` for missing data, or:
                 - ``"template_text"`` -> ``str``
-                - ``"page_exists"`` -> ``bool`` (``False`` marks page absent)
+                - ``"page_exists"`` -> ``bool`` (``False`` marks the page absent)
                 - ``"file_info"`` -> ``dict`` with ``"url"`` (``str``) and
                   optional ``"width"`` / ``"height"`` (``int``)
-                Any exception raised by ``lookup`` is caught and reported as a
-                ``"wiki_lookup"`` failure diagnostic in the returned dict.
-                NamuMark input does not invoke ``lookup``.
+                Exceptions from ``lookup`` become a ``"wiki_lookup"`` failure in
+                the returned dict. NamuMark input never calls ``lookup``.
 
         Returns:
-            dict: Decoded JSON response envelope:
-                - On success: ``{"ok": True, "content": str, "metadata": {
+            dict: Decoded JSON response:
+                - Success: ``{"ok": True, "content": str, "metadata": {
                   "categories": list[str],
                   "category_sort_keys": list[str | None],
                   "redirect_target": str | None,
                   "display_title": str | None},
                   "diagnostics": list[dict]}``.
-                - On failure: ``{"ok": False, "error": str,
+                - Failure: ``{"ok": False, "error": str,
                   "diagnostics": list[dict]}``.
-                Each diagnostic dict has ``kind`` (``"conversion_loss"``,
+                Each diagnostic has ``kind`` (``"conversion_loss"``,
                 ``"html_removal"``, ``"wiki_lookup"``, or ``"expansion_limit"``),
                 ``start`` and ``end`` (half-open UTF-8 byte offsets), and
                 ``message``.
@@ -128,19 +124,18 @@ class WikiText:
         Raises:
             TypeError: If ``request`` is not JSON-serializable.
             ValueError: If ``request`` contains non-JSON values such as ``NaN``.
-            RuntimeError: If the native library returns a null response pointer.
+            RuntimeError: If the native library returns a null pointer.
 
-        Example:
-            Convert NamuMark to GFM in strict mode::
+        Example::
 
-                res = wiki.convert({
-                    "source": "namumark",
-                    "target": "gfm",
-                    "input": "== Title ==\\n'''Bold'''",
-                    "mode": "strict",
-                })
-                assert res["ok"] is True
-                print(res["content"])
+            res = wiki.convert({
+                "source": "namumark",
+                "target": "gfm",
+                "input": "== Title ==\\n'''Bold'''",
+                "mode": "strict",
+            })
+            assert res["ok"] is True
+            print(res["content"])
         """
         def invoke(_data, operation, title, length, reply):
             try:
