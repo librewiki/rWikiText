@@ -1,0 +1,33 @@
+# Doxyfile for rWikiText C ABI documentation (include/rwikitext.h)
+
+PROJECT_NAME           = "rWikiText C ABI"
+PROJECT_BRIEF          = "Version 1 C ABI for MediaWiki wikitext, NamuMark, GFM, and HTML conversion"
+OUTPUT_DIRECTORY       = target/api-docs/c
+CREATE_SUBDIRS         = NO
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+
+INPUT                  = docs/api/c-mainpage.md include/rwikitext.h
+USE_MDFILE_AS_MAINPAGE = docs/api/c-mainpage.md
+FILE_PATTERNS          = *.h *.md
+RECURSIVE              = NO
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = .
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+
+FULL_PATH_NAMES        = NO
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+SEARCHENGINE           = YES
