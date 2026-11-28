@@ -20,3 +20,8 @@ The four MediaWiki directions (Wikitext ↔ GFM and Wikitext ↔ HTML, in both d
 Provide a runnable example for each binding that converts a document and exercises a wiki data callback. Run each example on all of its listed targets. Use Alpine's Node.js distribution for musl ARM64. Kotlin/Native's stock Linux targets use glibc. Defer 32-bit verification to later work. [Kotlin/Native targets](https://kotlinlang.org/docs/native-target-support.html) · [Node.js Alpine images](https://github.com/nodejs/docker-node#nodealpine)
 
 The matrix records first-release check targets, not completed results. The recorded Go example run and package tests cover glibc x86-64 only; Linux ARM64, musl, and the remaining binding runtimes are release gates tracked in [#26](https://github.com/librewiki/rWikiText/issues/26) and [#27](https://github.com/librewiki/rWikiText/issues/27).
+
+## Amendment: Node.js `napi-rs` migration and `v1.0.0` matrix completion
+
+- `v1.0.0` completed the Linux glibc (14/14, [#26](https://github.com/librewiki/rWikiText/issues/26)) and musl (12/12, [#27](https://github.com/librewiki/rWikiText/issues/27)) runtime verification matrices.
+- The Node.js binding (`@librewiki/rwikitext`) subsequently migrated from a C-ABI `dlopen` wrapper to a `napi-rs` Rust crate (`bindings/node/src/lib.rs`) that compiles the conversion core directly into platform-specific `.node` binaries for npm distribution across Linux (`x64`/`arm64`, glibc and musl), macOS (`x64`/`arm64`), and Windows (`x64`/`arm64`). It preserves the same request, response, metadata, diagnostic, and synchronous callback contract while adding TypeScript types and `convertAsync`. C, Python, PHP, Java, Kotlin/Native, and Go continue to call the version 1 C ABI.
