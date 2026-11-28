@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rWikiText API Documentation</title>
+  <meta name="description" content="API reference documentation for rWikiText across Rust, C/C++, Python, Node.js/TypeScript, Go, Java, Kotlin/Native, and PHP.">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --border-hover: #2563eb;
+      --text: #0f172a;
+      --muted: #475569;
+      --accent: #2563eb;
+      --badge-bg: #eff6ff;
+      --badge-text: #1d4ed8;
+      --notice-bg: #fef3c7;
+      --notice-border: #f59e0b;
+      --notice-text: #78350f;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+      --shadow-hover: 0 8px 20px rgba(37, 99, 235, 0.12);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b1120;
+        --surface: #111827;
+        --border: #1f2937;
+        --border-hover: #60a5fa;
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --accent: #60a5fa;
+        --badge-bg: #1e3a5f;
+        --badge-text: #93c5fd;
+        --notice-bg: #451a03;
+        --notice-border: #d97706;
+        --notice-text: #fde68a;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+        --shadow-hover: 0 8px 20px rgba(96, 165, 250, 0.16);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 48px 24px 64px;
+    }
+
+    header {
+      margin-bottom: 32px;
+    }
+
+    .eyebrow {
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 8px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(1.85rem, 4vw, 2.5rem);
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 68ch;
+    }
+
+    .route-notice {
+      display: none;
+      margin-top: 20px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--notice-border);
+      background: var(--notice-bg);
+      color: var(--notice-text);
+      font-size: 0.95rem;
+    }
+
+    .route-notice.visible {
+      display: block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: inherit;
+      text-decoration: none;
+      box-shadow: var(--shadow);
+      transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+    }
+
+    .card:hover,
+    .card:focus-visible {
+      transform: translateY(-2px);
+      border-color: var(--border-hover);
+      box-shadow: var(--shadow-hover);
+      outline: none;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-title {
+      font-size: 1.15rem;
+      font-weight: 650;
+      margin: 0;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      white-space: nowrap;
+    }
+
+    .card-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      flex: 1;
+    }
+
+    .card-entry {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+      word-break: break-word;
+    }
+
+    footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.88rem;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+    }
+  </style>
+  <script>
+    (function () {
+      var ROUTES = {
+        rust: "./rust/rwikitext/index.html",
+        rs: "./rust/rwikitext/index.html",
+        crate: "./rust/rwikitext/index.html",
+        c: "./c/index.html",
+        cpp: "./c/index.html",
+        "c++": "./c/index.html",
+        abi: "./c/index.html",
+        python: "./python/index.html",
+        py: "./python/index.html",
+        node: "./node/index.html",
+        nodejs: "./node/index.html",
+        js: "./node/index.html",
+        javascript: "./node/index.html",
+        ts: "./node/index.html",
+        typescript: "./node/index.html",
+        go: "./go/index.html",
+        golang: "./go/index.html",
+        java: "./java/index.html",
+        jni: "./java/index.html",
+        kotlin: "./kotlin/index.html",
+        kt: "./kotlin/index.html",
+        "kotlin-native": "./kotlin/index.html",
+        php: "./php/index.html"
+      };
+
+      var CANONICAL_DIRS = {
+        rust: "rust",
+        rs: "rust",
+        crate: "rust",
+        c: "c",
+        cpp: "c",
+        "c++": "c",
+        abi: "c",
+        python: "python",
+        py: "python",
+        node: "node",
+        nodejs: "node",
+        js: "node",
+        javascript: "node",
+        ts: "node",
+        typescript: "node",
+        go: "go",
+        golang: "go",
+        java: "java",
+        jni: "java",
+        kotlin: "kotlin",
+        kt: "kotlin",
+        "kotlin-native": "kotlin",
+        php: "php"
+      };
+
+      function sanitizeSubpath(parts) {
+        for (var i = 0; i < parts.length; i++) {
+          var seg = parts[i];
+          if (!seg || seg === "." || seg === ".." || seg.indexOf("\\") !== -1 || seg.indexOf(":") !== -1) {
+            return null;
+          }
+        }
+        return parts.join("/");
+      }
+
+      function resolveTarget() {
+        var params = new URLSearchParams(window.location.search);
+        var queryLang = (params.get("lang") || "").trim().toLowerCase();
+        if (queryLang) {
+          if (ROUTES[queryLang]) {
+            return { target: ROUTES[queryLang], unknown: null };
+          }
+          return { target: null, unknown: queryLang };
+        }
+
+        var rawHash = (window.location.hash || "").replace(/^#\/?/, "").trim();
+        if (!rawHash) {
+          return { target: null, unknown: null };
+        }
+
+        var parts = rawHash.split("/").filter(Boolean);
+        var langKey = (parts[0] || "").toLowerCase();
+        if (!ROUTES[langKey]) {
+          return { target: null, unknown: rawHash };
+        }
+
+        if (parts.length === 1) {
+          return { target: ROUTES[langKey], unknown: null };
+        }
+
+        var safeRest = sanitizeSubpath(parts.slice(1));
+        if (!safeRest) {
+          return { target: null, unknown: rawHash };
+        }
+        return { target: "./" + CANONICAL_DIRS[langKey] + "/" + safeRest, unknown: null };
+      }
+
+      function dispatchRoute() {
+        var resolved = resolveTarget();
+        if (resolved.target) {
+          window.location.replace(resolved.target);
+          return;
+        }
+        if (resolved.unknown) {
+          window.addEventListener("DOMContentLoaded", function () {
+            var el = document.getElementById("route-notice");
+            if (el) {
+              el.textContent = "Unknown language route \"" + resolved.unknown + "\". Choose a language below.";
+              el.classList.add("visible");
+            }
+          });
+        }
+      }
+
+      dispatchRoute();
+      window.addEventListener("hashchange", dispatchRoute);
+    })();
+  </script>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <p class="eyebrow">rWikiText</p>
+      <h1>API Reference Documentation</h1>
+      <p class="subtitle">
+        Compiled reference documentation for MediaWiki wikitext, NamuMark, GitHub Flavored Markdown, and HTML conversion across all supported language bindings.
+      </p>
+      <div id="route-notice" class="route-notice" role="status" aria-live="polite"></div>
+    </header>
+
+    <section class="grid" aria-label="Language API documentation">
+      <a class="card" href="./rust/rwikitext/index.html" data-lang="rust">
+        <div class="card-header">
+          <h2 class="card-title">Rust</h2>
+          <span class="badge">Rustdoc</span>
+        </div>
+        <p class="card-desc">Core Rust library, AST metadata, conversion options, and wiki-data traits.</p>
+        <span class="card-entry">crate rwikitext</span>
+      </a>
+
+      <a class="card" href="./c/index.html" data-lang="c">
+        <div class="card-header">
+          <h2 class="card-title">C / C++</h2>
+          <span class="badge">Doxygen</span>
+        </div>
+        <p class="card-desc">Version 1 C ABI header, JSON request/response schema, and lookup callbacks.</p>
+        <span class="card-entry">include/rwikitext.h</span>
+      </a>
+
+      <a class="card" href="./python/index.html" data-lang="python">
+        <div class="card-header">
+          <h2 class="card-title">Python</h2>
+          <span class="badge">Sphinx</span>
+        </div>
+        <p class="card-desc">Synchronous <code>ctypes</code> wrapper for <code>librwikitext</code> with lookup callbacks.</p>
+        <span class="card-entry">rwikitext.WikiText</span>
+      </a>
+
+      <a class="card" href="./node/index.html" data-lang="node">
+        <div class="card-header">
+          <h2 class="card-title">Node.js / TypeScript</h2>
+          <span class="badge">TypeDoc</span>
+        </div>
+        <p class="card-desc">NAPI-RS native addon with synchronous, async, and class-based APIs.</p>
+        <span class="card-entry">@librewiki/rwikitext</span>
+      </a>
+
+      <a class="card" href="./go/index.html" data-lang="go">
+        <div class="card-header">
+          <h2 class="card-title">Go</h2>
+          <span class="badge">GoDoc</span>
+        </div>
+        <p class="card-desc">cgo binding package with typed options, structured errors, and testable examples.</p>
+        <span class="card-entry">github.com/librewiki/rWikiText/bindings/go</span>
+      </a>
+
+      <a class="card" href="./java/index.html" data-lang="java">
+        <div class="card-header">
+          <h2 class="card-title">Java</h2>
+          <span class="badge">Javadoc</span>
+        </div>
+        <p class="card-desc">JNI binding for Java 21+ with functional lookup interface and reply builders.</p>
+        <span class="card-entry">org.librewiki.rwikitext.WikiText</span>
+      </a>
+
+      <a class="card" href="./kotlin/index.html" data-lang="kotlin">
+        <div class="card-header">
+          <h2 class="card-title">Kotlin/Native</h2>
+          <span class="badge">Dokka</span>
+        </div>
+        <p class="card-desc">cinterop wrapper with sealed <code>Reply</code> hierarchy and <code>Lookup</code> fun interface.</p>
+        <span class="card-entry">org.librewiki.rwikitext</span>
+      </a>
+
+      <a class="card" href="./php/index.html" data-lang="php">
+        <div class="card-header">
+          <h2 class="card-title">PHP</h2>
+          <span class="badge">phpDocumentor</span>
+        </div>
+        <p class="card-desc">PHP 8 native extension API with typed array request/response shapes.</p>
+        <span class="card-entry">rwikitext_convert()</span>
+      </a>
+    </section>
+
+    <footer>
+      <span>Direct routes: <code>?lang=rust</code>, <code>#python</code>, <code>#node</code>, <code>#go</code>, <code>#java</code>, <code>#kotlin</code>, <code>#c</code>, <code>#php</code></span>
+      <a href="https://github.com/librewiki/rWikiText">librewiki/rWikiText on GitHub</a>
+    </footer>
+  </main>
+</body>
+</html>

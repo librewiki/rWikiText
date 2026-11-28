@@ -1,0 +1,360 @@
+name: API Docs
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && 'pages' || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  docs-rust:
+    name: Build Rust Docs (Rustdoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --lib --locked
+
+      - name: Upload Rust docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-rust
+          path: target/doc
+          retention-days: 1
+
+  docs-c:
+    name: Build C Docs (Doxygen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+
+      - name: Build Doxygen HTML
+        run: |
+          mkdir -p target/api-docs/c
+          doxygen docs/api/Doxyfile
+
+      - name: Upload C docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-c
+          path: target/api-docs/c
+          retention-days: 1
+
+  docs-python:
+    name: Build Python Docs (Sphinx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Sphinx
+        run: python3 -m pip install --no-cache-dir sphinx==8.1.3 furo==2024.8.6
+
+      - name: Build Sphinx HTML
+        run: sphinx-build -W --keep-going -b html docs/api/sphinx target/api-docs/python
+
+      - name: Upload Python docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-python
+          path: target/api-docs/python
+          retention-days: 1
+
+  docs-node:
+    name: Build Node.js / TypeScript Docs (TypeDoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install TypeDoc
+        run: npm install --no-save --prefix /tmp/typedoc-env typedoc@0.27.6 typescript@5.7.3
+
+      - name: Build TypeDoc HTML
+        run: |
+          /tmp/typedoc-env/node_modules/.bin/typedoc \
+            --entryPoints bindings/node/index.d.ts \
+            --tsconfig docs/api/tsconfig.node-docs.json \
+            --readme bindings/node/README.md \
+            --name "@librewiki/rwikitext" \
+            --out target/api-docs/node
+
+      - name: Upload Node.js docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-node
+          path: target/api-docs/node
+          retention-days: 1
+
+  docs-go:
+    name: Build Go Docs (GoDoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Build Go static HTML docs
+        run: go run scripts/docs/gen_godoc.go -src bindings/go -out target/api-docs/go/index.html
+
+      - name: Upload Go docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-go
+          path: target/api-docs/go
+          retention-days: 1
+
+  docs-java:
+    name: Build Java Docs (Javadoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build Javadoc HTML
+        run: |
+          javadoc -encoding UTF-8 -charset UTF-8 -docencoding UTF-8 \
+            -sourcepath bindings/java/src \
+            -d target/api-docs/java \
+            -windowtitle "rWikiText Java API" \
+            -doctitle "rWikiText Java (JNI) API" \
+            org.librewiki.rwikitext
+
+      - name: Upload Java docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-java
+          path: target/api-docs/java
+          retention-days: 1
+
+  docs-kotlin:
+    name: Build Kotlin/Native Docs (Dokka)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download Dokka CLI 2.0.0
+        run: |
+          mkdir -p /tmp/dokka
+          BASE="https://repo1.maven.org/maven2"
+          curl -fsSL --retry 3 "$BASE/org/jetbrains/dokka/dokka-cli/2.0.0/dokka-cli-2.0.0.jar" -o /tmp/dokka/dokka-cli.jar
+          curl -fsSL --retry 3 "$BASE/org/jetbrains/dokka/dokka-base/2.0.0/dokka-base-2.0.0.jar" -o /tmp/dokka/dokka-base.jar
+          curl -fsSL --retry 3 "$BASE/org/jetbrains/dokka/analysis-kotlin-symbols/2.0.0/analysis-kotlin-symbols-2.0.0.jar" -o /tmp/dokka/analysis-kotlin-symbols.jar
+          curl -fsSL --retry 3 "$BASE/org/jetbrains/kotlinx/kotlinx-html-jvm/0.8.0/kotlinx-html-jvm-0.8.0.jar" -o /tmp/dokka/kotlinx-html-jvm.jar
+          curl -fsSL --retry 3 "$BASE/org/freemarker/freemarker/2.3.31/freemarker-2.3.31.jar" -o /tmp/dokka/freemarker.jar
+
+      - name: Build Dokka HTML
+        run: |
+          mkdir -p target/api-docs/kotlin
+          java -jar /tmp/dokka/dokka-cli.jar \
+            -moduleName "rWikiText Kotlin/Native" \
+            -pluginsClasspath "/tmp/dokka/dokka-base.jar;/tmp/dokka/analysis-kotlin-symbols.jar;/tmp/dokka/kotlinx-html-jvm.jar;/tmp/dokka/freemarker.jar" \
+            -sourceSet "-src bindings/kotlin-native/src -analysisPlatform native -displayName native" \
+            -outputDir target/api-docs/kotlin
+
+      - name: Upload Kotlin docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-kotlin
+          path: target/api-docs/kotlin
+          retention-days: 1
+
+  docs-php:
+    name: Build PHP Docs (phpDocumentor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: dom, intl, mbstring, xml, iconv, ctype, phar
+          coverage: none
+
+      - name: Download phpDocumentor
+        run: |
+          curl -fsSL --retry 3 \
+            "https://github.com/phpDocumentor/phpDocumentor/releases/latest/download/phpDocumentor.phar" \
+            -o /tmp/phpDocumentor.phar
+
+      - name: Build phpDocumentor HTML
+        run: |
+          php /tmp/phpDocumentor.phar run \
+            --no-interaction \
+            -f bindings/php/rwikitext.stub.php \
+            -t target/api-docs/php \
+            --title="rWikiText PHP API" \
+            --cache-folder=/tmp/phpdoc-cache
+
+      - name: Upload PHP docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-php
+          path: target/api-docs/php
+          retention-days: 1
+
+  assemble:
+    name: Assemble & Verify Multi-Language Docs Site
+    needs:
+      - docs-rust
+      - docs-c
+      - docs-python
+      - docs-node
+      - docs-go
+      - docs-java
+      - docs-kotlin
+      - docs-php
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Rust docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-rust
+          path: target/api-docs/rust
+
+      - name: Download C docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-c
+          path: target/api-docs/c
+
+      - name: Download Python docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-python
+          path: target/api-docs/python
+
+      - name: Download Node.js docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-node
+          path: target/api-docs/node
+
+      - name: Download Go docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-go
+          path: target/api-docs/go
+
+      - name: Download Java docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-java
+          path: target/api-docs/java
+
+      - name: Download Kotlin docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-kotlin
+          path: target/api-docs/kotlin
+
+      - name: Download PHP docs
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-php
+          path: target/api-docs/php
+
+      - name: Assemble index.html router and verify all entrypoints
+        run: python3 scripts/docs/assemble_site.py --site-dir target/api-docs --index docs/api/index.html
+
+      - name: Upload assembled site preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs-site
+          path: target/api-docs
+          retention-days: 14
+
+      - name: Upload GitHub Pages artifact
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/api-docs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: assemble
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

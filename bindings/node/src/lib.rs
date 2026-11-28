@@ -9,65 +9,105 @@ use rwikitext::{
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+/// Page and site settings used during conversion.
+///
+/// MediaWiki magic words such as `{{PAGENAME}}`, `{{CONTENTLANGUAGE}}`, and
+/// `{{CURRENTTIMESTAMP}}` read from these fields.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct WikiContext {
+    /// Current page title (defaults to `""`).
     #[napi(js_name = "page_title")]
     pub page_title: Option<String>,
+    /// Site language code (defaults to `"en"`).
     #[napi(js_name = "site_language")]
     pub site_language: Option<String>,
+    /// Reference UTC timestamp in RFC 3339 format (defaults to `"1970-01-01T00:00:00Z"`).
     #[napi(js_name = "reference_time")]
     pub reference_time: Option<String>,
 }
 
+/// Limits for MediaWiki template and parser-function expansion.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct ExpansionLimits {
+    /// Maximum template nesting depth (defaults to `40`).
     #[napi(js_name = "max_depth")]
     pub max_depth: Option<u32>,
+    /// Maximum number of template and parser-function expansions (defaults to `10000`).
     #[napi(js_name = "max_expansions")]
     pub max_expansions: Option<u32>,
+    /// Maximum expanded wikitext size in bytes (defaults to `2097152`).
     #[napi(js_name = "max_output_bytes")]
     pub max_output_bytes: Option<u32>,
 }
 
+/// Input and options for `convert` and `convertAsync`.
+///
+/// Supported pairs:
+/// - `"wikitext"` <-> `"gfm"`, `"html"`, `"namumark"`
+/// - `"namumark"` <-> `"wikitext"`, `"gfm"`, `"html"`
+///
+/// Identity conversions and direct `"gfm"` <-> `"html"` conversions return `ok: false`.
 #[napi(object)]
 #[derive(Clone)]
 pub struct ConversionRequest {
+    /// Input format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
     pub source: String,
+    /// Output format: `"wikitext"`, `"namumark"`, `"gfm"`, or `"html"`.
     pub target: String,
+    /// UTF-8 document text to convert.
     pub input: String,
+    /// Optional page and site context.
     pub context: Option<WikiContext>,
+    /// `"best_effort"` (default) or `"strict"` (fail on conversion loss).
     pub mode: Option<String>,
+    /// Optional MediaWiki expansion limits.
     #[napi(js_name = "expansion_limits")]
     pub expansion_limits: Option<ExpansionLimits>,
 }
 
+/// Warning or error tied to a byte span in `request.input`.
 #[napi(object)]
 pub struct Diagnostic {
+    /// `"conversion_loss"`, `"html_removal"`, `"wiki_lookup"`, or `"expansion_limit"`.
     pub kind: String,
+    /// Inclusive UTF-8 byte offset in `request.input`.
     pub start: u32,
+    /// Exclusive UTF-8 byte offset in `request.input`.
     pub end: u32,
+    /// Description of the issue.
     pub message: String,
 }
 
+/// Page metadata extracted outside the rendered document body.
 #[napi(object)]
 pub struct PageMetadata {
+    /// Category names in document order.
     pub categories: Vec<String>,
+    /// Sort keys parallel to `categories` (`null` when omitted).
     #[napi(js_name = "category_sort_keys")]
     pub category_sort_keys: Vec<Either<String, Null>>,
+    /// Redirect destination page title, or `null` if not a redirect.
     #[napi(js_name = "redirect_target")]
     pub redirect_target: Either<String, Null>,
+    /// Custom display title from `{{DISPLAYTITLE:...}}`, or `null` if unset.
     #[napi(js_name = "display_title")]
     pub display_title: Either<String, Null>,
 }
 
+/// Result returned by `convert` and `convertAsync`.
 #[napi(object)]
 pub struct ConversionResponse {
+    /// `true` on success, `false` on failure.
     pub ok: bool,
+    /// Converted text (present when `ok` is `true`).
     pub content: Option<String>,
+    /// Page metadata (present when `ok` is `true`).
     pub metadata: Option<PageMetadata>,
+    /// Error message (present when `ok` is `false`).
     pub error: Option<String>,
+    /// Diagnostics recorded during conversion or failure.
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -344,9 +384,40 @@ impl Task for ConvertTask {
     }
 }
 
-/// Convert a document synchronously.
+/// Converts a document synchronously on the calling thread.
 ///
-/// The optional synchronous `lookup(operation, title)` callback runs on the calling thread.
+/// The optional synchronous `lookup(operation, title)` callback receives a canonical
+/// namespace-prefixed, underscore-separated `title` and must return:
+/// - `null` or `undefined` when data is missing,
+/// - a `string` for `'template_text'`,
+/// - a `boolean` for `'page_exists'`, or
+/// - `{ url: string, width?: number, height?: number }` for `'file_info'`.
+///
+/// Returning a Promise/thenable or throwing an error turns into a `wiki_lookup`
+/// failure response (`ok: false`). NamuMark input does not invoke `lookup`.
+///
+/// @example
+/// ```ts
+/// import { convert } from '@librewiki/rwikitext'
+///
+/// const result = convert(
+///   {
+///     source: 'wikitext',
+///     target: 'gfm',
+///     input: "{{Greeting|{{PAGENAME}}}}\n[[Category:Docs|Guide]]",
+///     context: { page_title: 'Guide' },
+///   },
+///   (operation, title) => {
+///     if (operation === 'template_text' && title === 'Template:Greeting') {
+///       return 'Hello, {{{1}}}!'
+///     }
+///     return null
+///   },
+/// )
+/// if (result.ok) {
+///   console.log(result.content, result.metadata?.categories)
+/// }
+/// ```
 #[napi]
 pub fn convert(
     env: Env,
@@ -361,22 +432,51 @@ pub fn convert(
     run_conversion(&request, Some(&wiki_data))
 }
 
-/// Convert a document asynchronously on the libuv worker pool (without lookup callbacks).
+/// Converts a document asynchronously on the libuv worker pool without lookup callbacks.
+///
+/// @example
+/// ```ts
+/// import { convertAsync } from '@librewiki/rwikitext'
+///
+/// const result = await convertAsync({
+///   source: 'namumark',
+///   target: 'html',
+///   input: "== Title ==\n'''Bold'''",
+/// })
+/// if (result.ok) {
+///   console.log(result.content)
+/// }
+/// ```
 #[napi]
 pub fn convert_async(request: ConversionRequest) -> AsyncTask<ConvertTask> {
     AsyncTask::new(ConvertTask { request })
 }
 
+/// Class wrapper around {@link convert} and {@link convertAsync}.
+///
+/// The addon embeds the converter directly, so any `libraryPath` argument is ignored.
+///
+/// @example
+/// ```ts
+/// import { WikiText } from '@librewiki/rwikitext'
+///
+/// const wiki = new WikiText()
+/// const res = wiki.convert({ source: 'gfm', target: 'wikitext', input: '**Bold**' })
+/// ```
 #[napi]
 pub struct WikiText;
 
 #[napi]
 impl WikiText {
+    /// Creates a `WikiText` instance.
+    ///
+    /// @param libraryPath Ignored; kept for compatibility with ctypes-style bindings.
     #[napi(constructor)]
     pub fn new(_library_path: Option<String>) -> Self {
         Self
     }
 
+    /// Converts a document synchronously. See the top-level {@link convert} function.
     #[napi]
     pub fn convert(
         &self,
@@ -388,6 +488,7 @@ impl WikiText {
         convert(env, request, lookup)
     }
 
+    /// Converts a document asynchronously on the libuv worker pool. See {@link convertAsync}.
     #[napi]
     pub fn convert_async(&self, request: ConversionRequest) -> AsyncTask<ConvertTask> {
         convert_async(request)
