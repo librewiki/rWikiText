@@ -142,6 +142,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          cache: false
 
       - name: Build Go static HTML docs
         run: go run scripts/docs/gen_godoc.go -src bindings/go -out target/api-docs/go/index.html
@@ -209,6 +210,7 @@ jobs:
 
       - name: Build Dokka HTML
         run: |
+          mkdir -p target/api-docs/kotlin
           java -jar /tmp/dokka/dokka-cli.jar \
             -moduleName "rWikiText Kotlin/Native" \
             -pluginsClasspath "/tmp/dokka/dokka-base.jar;/tmp/dokka/analysis-kotlin-symbols.jar;/tmp/dokka/kotlinx-html-jvm.jar;/tmp/dokka/freemarker.jar" \

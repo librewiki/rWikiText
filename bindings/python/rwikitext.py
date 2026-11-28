@@ -83,6 +83,7 @@ class WikiText:
 
         Args:
             request (dict): Conversion request with keys:
+
                 - ``source`` (str): Input format (``"wikitext"``, ``"namumark"``,
                   ``"gfm"``, or ``"html"``).
                 - ``target`` (str): Output format.
@@ -99,15 +100,18 @@ class WikiText:
                 callback called on the current thread as ``lookup(operation, title)``.
                 ``title`` uses canonical namespace casing and underscores (e.g.
                 ``"Template:Greeting"``). Return ``None`` for missing data, or:
+
                 - ``"template_text"`` -> ``str``
                 - ``"page_exists"`` -> ``bool`` (``False`` marks the page absent)
                 - ``"file_info"`` -> ``dict`` with ``"url"`` (``str``) and
                   optional ``"width"`` / ``"height"`` (``int``)
+
                 Exceptions from ``lookup`` become a ``"wiki_lookup"`` failure in
                 the returned dict. NamuMark input never calls ``lookup``.
 
         Returns:
             dict: Decoded JSON response:
+
                 - Success: ``{"ok": True, "content": str, "metadata": {
                   "categories": list[str],
                   "category_sort_keys": list[str | None],
@@ -116,6 +120,7 @@ class WikiText:
                   "diagnostics": list[dict]}``.
                 - Failure: ``{"ok": False, "error": str,
                   "diagnostics": list[dict]}``.
+
                 Each diagnostic has ``kind`` (``"conversion_loss"``,
                 ``"html_removal"``, ``"wiki_lookup"``, or ``"expansion_limit"``),
                 ``start`` and ``end`` (half-open UTF-8 byte offsets), and
