@@ -101,6 +101,12 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_rwikitext_convert, 0, 1, IS_ARRA
     ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, lookup, IS_CALLABLE, 1, "null")
 ZEND_END_ARG_INFO()
 
+/**
+ * @brief PHP function `rwikitext_convert(array $request, ?callable $lookup = null): array`.
+ *
+ * Converts a UTF-8 document using the rWikiText version 1 C ABI. See
+ * `rwikitext.stub.php` for the full PHPDoc signature, array shapes, and PHP examples.
+ */
 PHP_FUNCTION(rwikitext_convert)
 {
     zval *request, *callback = NULL;

@@ -1,4 +1,30 @@
-// Package rwikitext converts documents using the rWikiText native library.
+// Package rwikitext converts UTF-8 documents using the rWikiText version 1 C ABI.
+//
+// It supports MediaWiki wikitext ([Wikitext]), NamuMark ([NamuMark]),
+// GitHub Flavored Markdown ([GFM]), and HTML ([HTML]).
+//
+// # Supported Format Pairs
+//
+//   - [Wikitext] <-> [GFM], [HTML], [NamuMark]
+//   - [NamuMark] <-> [Wikitext], [GFM], [HTML]
+//
+// Identity conversions (source == target) and direct [GFM] <-> [HTML]
+// conversions are unsupported and return a [*ConversionError].
+//
+// # Quick Start
+//
+//	result, err := rwikitext.Convert(
+//		rwikitext.Wikitext,
+//		rwikitext.GFM,
+//		"== Overview ==\n'''Bold''' text on {{PAGENAME}}.",
+//		rwikitext.Options{
+//			Context: rwikitext.WikiContext{PageTitle: "Guide"},
+//		},
+//	)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	fmt.Println(result.Content)
 package rwikitext
 
 /*
@@ -20,107 +46,180 @@ import (
 	"unsafe"
 )
 
-// Format identifies a document format.
+// Format identifies a supported input or output document format.
 type Format string
 
 const (
+	// Wikitext selects MediaWiki wikitext.
 	Wikitext Format = "wikitext"
+	// NamuMark selects NamuMark wiki markup.
 	NamuMark Format = "namumark"
-	GFM      Format = "gfm"
-	HTML     Format = "html"
+	// GFM selects GitHub Flavored Markdown.
+	GFM Format = "gfm"
+	// HTML selects HTML (Parsoid-compatible when converting from MediaWiki wikitext).
+	HTML Format = "html"
 )
 
-// Mode controls how conversion loss is handled. The zero value is BestEffort.
+// Mode controls how conversion loss is handled. The zero value defaults to [BestEffort].
 type Mode string
 
 const (
+	// BestEffort completes the conversion and records lossy constructs in [Result.Diagnostics].
 	BestEffort Mode = "best_effort"
-	Strict     Mode = "strict"
+	// Strict fails with [*ConversionError] if any construct would lose document meaning.
+	Strict Mode = "strict"
 )
 
-// WikiContext supplies the page and site settings for a conversion.
+// WikiContext supplies page- and site-level settings for a conversion.
+//
+// MediaWiki magic words such as {{PAGENAME}}, {{CONTENTLANGUAGE}}, and
+// {{CURRENTTIMESTAMP}} read from these fields. Zero or nil fields use the native
+// defaults: empty page title, site language "en", and reference time 1970-01-01T00:00:00Z.
 type WikiContext struct {
-	PageTitle     string     `json:"page_title,omitempty"`
-	SiteLanguage  *string    `json:"site_language,omitempty"`
-	ReferenceTime *time.Time `json:"reference_time,omitempty"` // Converted to UTC at whole-second precision.
+	// PageTitle is the title of the page being converted (for example, "Guide").
+	PageTitle string `json:"page_title,omitempty"`
+	// SiteLanguage is the BCP 47 / MediaWiki content language code (for example, "en" or "ko").
+	SiteLanguage *string `json:"site_language,omitempty"`
+	// ReferenceTime is converted to UTC at whole-second precision before being sent to the converter.
+	ReferenceTime *time.Time `json:"reference_time,omitempty"`
 }
 
-// ExpansionLimits bounds transclusion; nil fields use the native defaults.
+// ExpansionLimits bounds MediaWiki template and parser-function expansion.
+//
+// Nil fields use the native defaults: MaxDepth 40, MaxExpansions 10000, and
+// MaxOutputBytes 2097152 (2 MiB).
 type ExpansionLimits struct {
-	MaxDepth       *uint `json:"max_depth,omitempty"`
-	MaxExpansions  *uint `json:"max_expansions,omitempty"`
+	// MaxDepth limits recursive template nesting depth.
+	MaxDepth *uint `json:"max_depth,omitempty"`
+	// MaxExpansions limits the total number of template and parser-function expansions.
+	MaxExpansions *uint `json:"max_expansions,omitempty"`
+	// MaxOutputBytes limits the expanded wikitext buffer size in bytes.
 	MaxOutputBytes *uint `json:"max_output_bytes,omitempty"`
 }
 
-// FileInfo describes a file returned by a lookup.
+// FileInfo describes rendering metadata for a wiki file returned by [Lookups.FileInfo].
 type FileInfo struct {
-	URL    string  `json:"url"`
-	Width  *uint32 `json:"width,omitempty"`
+	// URL is the absolute or root-relative URL for the file resource.
+	URL string `json:"url"`
+	// Width is the optional intrinsic image width in pixels.
+	Width *uint32 `json:"width,omitempty"`
+	// Height is the optional intrinsic image height in pixels.
 	Height *uint32 `json:"height,omitempty"`
 }
 
-// Lookups supplies wiki data. The boolean reports whether a value was found.
+// Lookups supplies synchronous wiki-data callbacks invoked on the calling goroutine
+// during MediaWiki conversion.
+//
+// Each callback receives a canonical namespace-prefixed, underscore-separated title
+// (for example, "Template:Greeting", "Main_Page", or "File:Example.png").
+// The returned boolean reports whether a value was found; returning (zero, false, nil)
+// or leaving a callback nil reports missing data. Returning a non-nil error or panicking
+// aborts the conversion with a located [WikiLookup] diagnostic.
+//
+// NamuMark input does not invoke any callbacks.
 type Lookups struct {
-	TemplateText func(string) (string, bool, error)
-	PageExists   func(string) (bool, bool, error)
-	FileInfo     func(string) (FileInfo, bool, error)
+	// TemplateText returns the raw wikitext source of a transcluded template.
+	TemplateText func(title string) (text string, found bool, err error)
+	// PageExists reports whether a page exists. Returning (false, true, nil) explicitly
+	// marks the page absent (producing red links in HTML output).
+	PageExists func(title string) (exists bool, found bool, err error)
+	// FileInfo returns rendering metadata for a wiki file.
+	FileInfo func(title string) (info FileInfo, found bool, err error)
 }
 
-// Options configures conversion. Its zero value uses native defaults.
+// Options configures a call to [Convert]. Its zero value uses native defaults
+// ([BestEffort] mode, default [WikiContext], default [ExpansionLimits], and no lookups).
 type Options struct {
-	Context         WikiContext
-	Mode            Mode
+	// Context supplies page title, site language, and reference time.
+	Context WikiContext
+	// Mode selects [BestEffort] or [Strict] loss handling.
+	Mode Mode
+	// ExpansionLimits bounds MediaWiki template expansion.
 	ExpansionLimits ExpansionLimits
-	Lookups         Lookups
+	// Lookups provides optional synchronous wiki-data callbacks.
+	Lookups Lookups
 }
 
-// DiagnosticKind identifies the reason for a diagnostic.
+// DiagnosticKind identifies the category of a [Diagnostic].
 type DiagnosticKind string
 
 const (
+	// ConversionLoss indicates a source construct could not be represented losslessly.
 	ConversionLoss DiagnosticKind = "conversion_loss"
-	HTMLRemoval    DiagnosticKind = "html_removal"
-	WikiLookup     DiagnosticKind = "wiki_lookup"
+	// HTMLRemoval indicates unsafe or disallowed raw HTML was stripped.
+	HTMLRemoval DiagnosticKind = "html_removal"
+	// WikiLookup indicates a [Lookups] callback returned an error, panicked, or produced an invalid reply.
+	WikiLookup DiagnosticKind = "wiki_lookup"
+	// ExpansionLimit indicates MediaWiki expansion exceeded a configured [ExpansionLimits] bound.
 	ExpansionLimit DiagnosticKind = "expansion_limit"
 )
 
-// Diagnostic describes an issue in a half-open UTF-8 byte range of the input.
+// Diagnostic describes a located warning or failure in a half-open UTF-8 byte
+// range [Start, End) of the original input.
 type Diagnostic struct {
-	Kind    DiagnosticKind `json:"kind"`
-	Message string         `json:"message"`
-	Start   int            `json:"start"`
-	End     int            `json:"end"`
+	// Kind classifies the diagnostic.
+	Kind DiagnosticKind `json:"kind"`
+	// Message is a human-readable description of the issue.
+	Message string `json:"message"`
+	// Start is the inclusive UTF-8 byte offset in the input.
+	Start int `json:"start"`
+	// End is the exclusive UTF-8 byte offset in the input.
+	End int `json:"end"`
 }
 
-// PageMetadata contains information outside the rendered page body.
+// PageMetadata contains page-level metadata extracted outside the rendered body.
 type PageMetadata struct {
-	Categories       []string  `json:"categories"`
+	// Categories lists category names in document order.
+	Categories []string `json:"categories"`
+	// CategorySortKeys is parallel to Categories; nil entries indicate no explicit sort key.
 	CategorySortKeys []*string `json:"category_sort_keys"`
-	RedirectTarget   *string   `json:"redirect_target"`
-	DisplayTitle     *string   `json:"display_title"`
+	// RedirectTarget is the redirect destination page title, or nil if not a redirect.
+	RedirectTarget *string `json:"redirect_target"`
+	// DisplayTitle is the custom display title from {{DISPLAYTITLE:...}}, or nil if unset.
+	DisplayTitle *string `json:"display_title"`
 }
 
-// Result contains the converted document, metadata and diagnostics.
+// Result contains the converted document, extracted metadata, and non-fatal diagnostics.
 type Result struct {
-	Content     string       `json:"content"`
-	Metadata    PageMetadata `json:"metadata"`
+	// Content is the converted document text in the requested target format.
+	Content string `json:"content"`
+	// Metadata holds page-level metadata extracted from the source document.
+	Metadata PageMetadata `json:"metadata"`
+	// Diagnostics lists any non-fatal warnings emitted during conversion.
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
-// ConversionError is a failure reported by the converter.
+// ConversionError is returned by [Convert] when the converter rejects or aborts a conversion,
+// such as for unsupported format pairs, [Strict] conversion loss, [WikiLookup] failures,
+// or exceeded [ExpansionLimits].
 type ConversionError struct {
-	Message     string
+	// Message describes why the conversion failed.
+	Message string
+	// Diagnostics contains the located diagnostics associated with the failure, if any.
 	Diagnostics []Diagnostic
 }
 
+// Error implements the error interface.
 func (e *ConversionError) Error() string { return e.Message }
 
-// NativeError reports a request encoding, ABI, or response processing failure.
-type NativeError struct{ Message string }
+// NativeError is returned by [Convert] when the input is not valid UTF-8, the linked
+// native ABI version mismatches, or JSON request/response marshaling fails.
+type NativeError struct {
+	// Message describes the binding or ABI failure.
+	Message string
+}
 
+// Error implements the error interface.
 func (e *NativeError) Error() string { return e.Message }
 
 // Convert converts UTF-8 input from source to target using the supplied options.
+//
+// Convert is safe for concurrent use across goroutines and supports nested
+// (re-entrant) calls from inside [Lookups] callbacks.
+//
+// Returned errors are either [*ConversionError] (converter-reported failure with
+// optional located diagnostics) or [*NativeError] (invalid UTF-8 input, ABI mismatch,
+// or marshaling failure).
 func Convert(source, target Format, input string, options Options) (Result, error) {
 	if !utf8.ValidString(input) {
 		return Result{}, &NativeError{Message: "conversion input must be valid UTF-8"}
