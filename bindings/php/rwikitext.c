@@ -161,7 +161,7 @@ static const zend_function_entry rwikitext_functions[] = {
 };
 zend_module_entry rwikitext_module_entry = {
     STANDARD_MODULE_HEADER, "rwikitext", rwikitext_functions, NULL, NULL, NULL, NULL, NULL,
-    "0.1.0", STANDARD_MODULE_PROPERTIES
+    "1.0.1", STANDARD_MODULE_PROPERTIES
 };
 #ifdef COMPILE_DL_RWIKITEXT
 #ifdef ZTS

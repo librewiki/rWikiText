@@ -8,7 +8,7 @@ sys.path.insert(0, str(ROOT / "bindings" / "python"))
 
 project = "rWikiText Python API"
 author = "LibreWiki"
-release = "1.0.0"
+release = "1.0.1"
 
 extensions = [
     "sphinx.ext.autodoc",
