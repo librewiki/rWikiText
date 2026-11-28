@@ -1,0 +1,229 @@
+name: Publish Python (PyPI)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: false
+        default: "main"
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.wheel_plat }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            wheel_plat: manylinux_2_17_x86_64
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: "2.17"
+            musl: false
+            macosx_deployment_target: ""
+            ext: so
+            lib_prefix: lib
+            test: true
+          - target: aarch64-unknown-linux-gnu
+            wheel_plat: manylinux_2_17_aarch64
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: "2.17"
+            musl: false
+            macosx_deployment_target: ""
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: x86_64-unknown-linux-musl
+            wheel_plat: musllinux_1_2_x86_64
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: ""
+            musl: true
+            macosx_deployment_target: ""
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: aarch64-unknown-linux-musl
+            wheel_plat: musllinux_1_2_aarch64
+            os: ubuntu-latest
+            use_zig: true
+            abi_suffix: ""
+            musl: true
+            macosx_deployment_target: ""
+            ext: so
+            lib_prefix: lib
+            test: false
+          - target: x86_64-apple-darwin
+            wheel_plat: macosx_10_12_x86_64
+            os: macos-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            macosx_deployment_target: "10.12"
+            ext: dylib
+            lib_prefix: lib
+            test: false
+          - target: aarch64-apple-darwin
+            wheel_plat: macosx_11_0_arm64
+            os: macos-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            macosx_deployment_target: "11.0"
+            ext: dylib
+            lib_prefix: lib
+            test: true
+          - target: x86_64-pc-windows-msvc
+            wheel_plat: win_amd64
+            os: windows-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            macosx_deployment_target: ""
+            ext: dll
+            lib_prefix: ""
+            test: true
+          - target: aarch64-pc-windows-msvc
+            wheel_plat: win_arm64
+            os: windows-latest
+            use_zig: false
+            abi_suffix: ""
+            musl: false
+            macosx_deployment_target: ""
+            ext: dll
+            lib_prefix: ""
+            test: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Zig
+        if: matrix.use_zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: "0.13.0"
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zig
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Build native library (cargo-zigbuild)
+        if: matrix.use_zig
+        shell: bash
+        run: |
+          TARGET="${{ matrix.target }}"
+          if [ -n "${{ matrix.abi_suffix }}" ]; then
+            TARGET="${TARGET}.${{ matrix.abi_suffix }}"
+          fi
+          if [ "${{ matrix.musl }}" = "true" ]; then
+            export RUSTFLAGS="-C target-feature=-crt-static"
+          fi
+          cargo zigbuild --locked --release --lib --target "$TARGET"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}rwikitext.${{ matrix.ext }}" \
+            "bindings/python/rwikitext/"
+
+      - name: Build native library (cargo)
+        if: ${{ !matrix.use_zig }}
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.macosx_deployment_target }}" ]; then
+            export MACOSX_DEPLOYMENT_TARGET="${{ matrix.macosx_deployment_target }}"
+          fi
+          cargo build --locked --release --lib --target "${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib_prefix }}rwikitext.${{ matrix.ext }}" \
+            "bindings/python/rwikitext/"
+
+      - name: Build Python wheel
+        working-directory: bindings/python
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          RWIKITEXT_PLAT_NAME="${{ matrix.wheel_plat }}" python -m build --wheel --outdir dist
+
+      - name: Smoke test Python wheel
+        if: matrix.test
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/test-venv"
+          if [ -x "$RUNNER_TEMP/test-venv/Scripts/python.exe" ]; then
+            VENV_PYTHON="$RUNNER_TEMP/test-venv/Scripts/python.exe"
+          else
+            VENV_PYTHON="$RUNNER_TEMP/test-venv/bin/python"
+          fi
+          "$VENV_PYTHON" -m pip install --no-deps bindings/python/dist/*.whl
+          "$VENV_PYTHON" - <<'PY'
+          from rwikitext import WikiText
+
+          wiki = WikiText()
+          res = wiki.convert({"source": "wikitext", "target": "html", "input": "Hello '''wiki'''"})
+          assert res["ok"] and "<b>wiki</b>" in res["content"], res
+          print("Python wheel smoke test passed:", res["content"])
+          PY
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.wheel_plat }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish wheels to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: List wheels to publish
+        run: ls -la dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true

@@ -1,6 +1,26 @@
 # Python binding
 
-This synchronous binding loads the shared rWikiText library through `ctypes`. It needs Python 3 and a library built from this repository; no Python packages are required. From the repository root on Linux (glibc or musl, x86-64 or ARM64):
+This synchronous binding loads the shared rWikiText library through `ctypes`.
+
+## Installation
+
+Install a prebuilt wheel from PyPI (bundles the native shared library):
+
+```sh
+pip install rwikitext
+```
+
+```python
+from rwikitext import WikiText
+
+wiki = WikiText()
+result = wiki.convert({"source": "wikitext", "target": "html", "input": "Hello '''wiki'''"})
+print(result["content"])
+```
+
+## Building from source
+
+To run against a locally built library from this repository without installing a wheel (Linux glibc/musl, x86-64/ARM64):
 
 ```sh
 # On glibc:
@@ -10,7 +30,7 @@ RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --lib
 python3 bindings/python/example.py "$(pwd)/target/release/librwikitext.so"
 ```
 
-To use it in an application, put `bindings/python` on `PYTHONPATH` and create `WikiText('/absolute/path/to/librwikitext.so')`. Call `wiki.convert(request, lookup)`; the optional synchronous `lookup(operation, title)` is invoked on the calling thread. Its result must be JSON-serializable:
+You can also pass an explicit shared library path to `WikiText('/absolute/path/to/librwikitext.so')`. Call `wiki.convert(request, lookup)`; the optional synchronous `lookup(operation, title)` is invoked on the calling thread. Its result must be JSON-serializable:
 
 - `template_text`: a string of wikitext, or `None` when missing.
 - `page_exists`: a boolean, or `None` when missing.
