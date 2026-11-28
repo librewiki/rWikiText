@@ -39,9 +39,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
       - name: Check if version is already published on crates.io
         id: check
         run: |

@@ -31,9 +31,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
       - name: Build Rustdoc
         env:
           RUSTDOCFLAGS: "-D warnings"
@@ -328,13 +325,6 @@ jobs:
       - name: Assemble index.html router and verify all entrypoints
         run: python3 scripts/docs/assemble_site.py --site-dir target/api-docs --index docs/api/index.html
 
-      - name: Upload assembled site preview artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: api-docs-site
-          path: target/api-docs
-          retention-days: 14
-
       - name: Upload GitHub Pages artifact
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-pages-artifact@v3
@@ -357,3 +347,37 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  cleanup:
+    name: Cleanup Workflow Artifacts
+    if: always()
+    needs:
+      - docs-rust
+      - docs-c
+      - docs-python
+      - docs-node
+      - docs-go
+      - docs-java
+      - docs-kotlin
+      - docs-php
+      - assemble
+      - deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Delete workflow run artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[].id')"
+          if [ -z "$ids" ]; then
+            echo "No artifacts to delete."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "Deleting artifact ${id}"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" || true
+          done
