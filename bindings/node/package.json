@@ -1,6 +1,6 @@
 {
   "name": "@librewiki/rwikitext",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Node.js binding for rWikiText (MediaWiki wikitext, NamuMark, GFM, and HTML converter)",
   "license": "MIT",
   "repository": {

@@ -116,17 +116,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: bindings/node
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: bindings/node/package-lock.json
 
       - name: Install Zig
         if: matrix.use_zig
@@ -175,6 +168,7 @@ jobs:
           name: bindings-${{ matrix.platform }}
           path: bindings/node/rwikitext.${{ matrix.platform }}.node
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Publish packages to npm
@@ -196,8 +190,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: bindings/node/package-lock.json
 
       - name: Upgrade npm for Trusted Publishing (OIDC)
         run: npm install -g npm@latest
@@ -253,3 +245,29 @@ jobs:
           done
 
           publish_if_missing "." "--ignore-scripts"
+
+  cleanup:
+    name: Cleanup Build Artifacts
+    if: always()
+    needs:
+      - build
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Delete workflow run artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[].id')"
+          if [ -z "$ids" ]; then
+            echo "No artifacts to delete."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "Deleting artifact ${id}"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" || true
+          done
