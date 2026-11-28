@@ -4,11 +4,11 @@ The Rust library exposes document conversion through a versioned C ABI and ships
 
 ## Caller-supplied wiki data
 
-Each conversion request supplies its input and output formats, wiki context, and any data callbacks. Outside NamuMark conversions, the Rust library requests template text, page existence, or file information as needed. Callbacks run synchronously on the thread invoking the conversion. A callback returns the requested data, reports that it is missing, or reports a lookup error. Missing data follows Parsoid behavior. A lookup error fails the conversion so the caller can decide whether to retry. The caller owns data access, which also permits offline conversion with local data.
+Each conversion request supplies its input and output formats, wiki context, and any data callbacks. In ABI v1 (`v1.0.x`), outside NamuMark conversions, the Rust library requests template text, page existence, or file information as needed. Callbacks run synchronously on the thread invoking the conversion. A callback returns the requested data, reports that it is missing, or reports a lookup error. Missing data follows Parsoid behavior. A lookup error fails the conversion so the caller can decide whether to retry. The caller owns data access, which also permits offline conversion with local data. **Note:** Template lookup and the static `wiki_data` template-list model are superseded by [ADR 0004](0004-template-finder-and-renderer.md).
 
 The test CLI uses the same document conversion API. It selects a supported source and target format pair, reads input from a file or standard input, and serves wiki context and lookup responses from local test data. It writes converted content to standard output and diagnostics to standard error.
 
-The four MediaWiki directions (Wikitext ↔ GFM and Wikitext ↔ HTML, in both directions) remain the implemented MediaWiki contract. The [NamuMark scope amendment](0001-parsoid-and-document-fidelity.md#scope-amendment-namumark-2026-11-24) adds the six NamuMark directions, now exposed through the shared API and bindings. Preserve existing ABI behavior and version incompatible changes; NamuMark context and callback semantics are defined by its own baseline, and NamuMark input invokes no wiki-data callbacks.
+The four MediaWiki directions (Wikitext ↔ GFM and Wikitext ↔ HTML, in both directions) remain the implemented MediaWiki contract. The [NamuMark scope amendment](0001-parsoid-and-document-fidelity.md#scope-amendment-namumark-2026-11-24) adds the six NamuMark directions, now exposed through the shared API and bindings. Preserve existing ABI behavior and version incompatible changes; NamuMark context and callback semantics are governed by its baseline and [ADR 0004](0004-template-finder-and-renderer.md).
 
 ## First-release Linux runtime checks
 
@@ -25,3 +25,7 @@ The matrix records first-release check targets, not completed results. The recor
 
 - `v1.0.0` completed the Linux glibc (14/14, [#26](https://github.com/librewiki/rWikiText/issues/26)) and musl (12/12, [#27](https://github.com/librewiki/rWikiText/issues/27)) runtime verification matrices.
 - The Node.js binding (`@librewiki/rwikitext`) subsequently migrated from a C-ABI `dlopen` wrapper to a `napi-rs` Rust crate (`bindings/node/src/lib.rs`) that compiles the conversion core directly into platform-specific `.node` binaries for npm distribution across Linux (`x64`/`arm64`, glibc and musl), macOS (`x64`/`arm64`), and Windows (`x64`/`arm64`). It preserves the same request, response, metadata, diagnostic, and synchronous callback contract while adding TypeScript types and `convertAsync`. C, Python, PHP, Java, Kotlin/Native, and Go continue to call the version 1 C ABI.
+
+## Superseded template lookup (2026-11-28)
+
+The static `wiki_data` template-list / `WikiData::template_text` model and the rule that NamuMark `[include(...)]` invokes no callback are superseded by [ADR 0004: Replace static `wiki_data` template lists with `TemplateFinder`, `TemplateFinderTask`, and `TemplateRenderer`](0004-template-finder-and-renderer.md).
