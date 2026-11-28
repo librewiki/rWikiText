@@ -30,6 +30,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo artifacts
+        if: github.event_name == 'pull_request'
         uses: Swatinem/rust-cache@v2
 
       - name: Setup PHP for Parsoid compatibility tests
@@ -40,6 +41,7 @@ jobs:
           coverage: none
 
       - name: Cache pinned MediaWiki archive
+        if: github.event_name == 'pull_request'
         uses: actions/cache@v4
         with:
           path: target/upstream/mediawiki-1.46.2.tar.gz
@@ -66,12 +68,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo artifacts
+        if: github.event_name == 'pull_request'
         uses: Swatinem/rust-cache@v2
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+          cache: false
 
       - name: Setup Java
         uses: actions/setup-java@v4
